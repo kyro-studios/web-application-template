@@ -1,0 +1,38 @@
+name: Validate Conventional Commits
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  commitlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Node.js のセットアップ
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: 依存関係のインストール
+        run: npm ci
+
+      - name: バージョン出力
+        run: |
+          git --version
+          node --version
+          npm --version
+          npx commitlint --version
+
+      - name: Push時に最新のコミットを検証する
+        if: github.event_name == 'push'
+        run: npx commitlint --last --verbose
+
+      - name: PRに対するすべてのコミットを検証する
+        if: github.event_name == 'pull_request'
+        run: npx commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }} --verbose
