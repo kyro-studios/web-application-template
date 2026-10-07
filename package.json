@@ -1,0 +1,16 @@
+{
+  "name": "react-javalin-template",
+  "version": "1.0.0",
+  "description": "Webアプリケーション開発用のテンプレート",
+  "author": "shohei-yamagiwa",
+  "devDependencies": {
+    "@commitlint/cli": "21.2.3",
+    "@commitlint/config-conventional": "21.2.3",
+    "husky": "9.1.7"
+  },
+  "scripts": {
+    "test": "echo \"No tests found\"",
+    "postinstall": "node ./scripts/postinstall.js",
+    "prepare": "husky"
+  }
+}

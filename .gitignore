@@ -1,0 +1,54 @@
+# Node.js dependencies and frontend output
+node_modules/
+dist/
+build/
+coverage/
+.cache/
+.vite/
+*.tsbuildinfo
+.eslintcache
+
+# Java build output (keep Maven / Gradle wrapper files)
+target/
+.gradle/
+out/
+*.class
+
+# Local environment configuration (keep sample files)
+.env
+.env.*
+!.env.example
+!.env.*.example
+!.env.sample
+!.env.*.sample
+!.env.template
+!.env.*.template
+
+# Logs and JVM crash reports
+*.log
+hs_err_pid*
+replay_pid*
+
+# Generated Git hook files
+/.husky/_/
+
+# IDE and editor files (keep shared VS Code configuration)
+.idea/
+*.iml
+.classpath
+.project
+.settings/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+.history/
+*.swp
+*.swo
+*~
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
