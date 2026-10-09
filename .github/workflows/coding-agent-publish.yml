@@ -1,0 +1,137 @@
+name: Coding Agent Publish
+
+on:
+  workflow_call:
+    inputs:
+      agent-id:
+        description: エージェントの識別子 (ブランチ名に使う)
+        type: string
+        required: true
+      agent-name:
+        description: エージェントの表示名
+        type: string
+        required: true
+      issue-number:
+        description: 対象の Issue 番号
+        type: string
+        required: true
+      base-branch:
+        description: PR のマージ先ブランチ
+        type: string
+        required: true
+      base-sha:
+        description: エージェントが作業を始めたコミット
+        type: string
+        required: true
+      artifact-name:
+        description: 変更内容 (changes.patch) とエージェントの出力 (result.json) を含む Artifact の名前
+        type: string
+        required: true
+    secrets:
+      OP_SERVICE_ACCOUNT_TOKEN:
+        description: 1Password のサービスアカウントトークン
+        required: true
+
+permissions: {}
+
+jobs:
+  publish:
+    name: PR の作成
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: GitHub App の設定を確認する
+        env:
+          APP_CLIENT_ID: ${{ vars.CODING_AGENT_APP_CLIENT_ID }}
+          PRIVATE_KEY_REF: ${{ vars.OP_CODING_AGENT_APP_PRIVATE_KEY_REF }}
+        run: |
+          if [ -z "$APP_CLIENT_ID" ] || [ -z "$PRIVATE_KEY_REF" ]; then
+            echo "::error::リポジトリ変数 CODING_AGENT_APP_CLIENT_ID と OP_CODING_AGENT_APP_PRIVATE_KEY_REF を設定してください"
+            exit 1
+          fi
+
+      - name: 1Password から秘密鍵を読み込む
+        id: op
+        uses: 1password/load-secrets-action@v5
+        with:
+          export-env: false
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          APP_PRIVATE_KEY: ${{ vars.OP_CODING_AGENT_APP_PRIVATE_KEY_REF }}
+
+      - name: GitHub App のトークンを発行する
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.CODING_AGENT_APP_CLIENT_ID }}
+          private-key: ${{ steps.op.outputs.APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.base-sha }}
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: エージェントの作業結果を取得する
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ runner.temp }}/coding-agent-result
+
+      - name: コミットして PR を作成する
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          AGENT_ID: ${{ inputs.agent-id }}
+          AGENT_NAME: ${{ inputs.agent-name }}
+          ISSUE_NUMBER: ${{ inputs.issue-number }}
+          BASE_BRANCH: ${{ inputs.base-branch }}
+          RESULT_DIR: ${{ runner.temp }}/coding-agent-result
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          patch="$RESULT_DIR/changes.patch"
+          result="$RESULT_DIR/result.json"
+
+          if [ ! -s "$patch" ]; then
+            gh issue comment "$ISSUE_NUMBER" --body "🤖 ${AGENT_NAME} は変更を作成しませんでした。詳細は [ワークフロー]($RUN_URL) のログを確認してください。"
+            exit 0
+          fi
+
+          # エージェントの出力が壊れていても PR を作成できるよう、既定値を用意しておく
+          commit_message="$(jq -r '.commit_message // empty' "$result" 2>/dev/null || true)"
+          pull_request_body="$(jq -r '.pull_request_body // empty' "$result" 2>/dev/null || true)"
+          if [ -z "$commit_message" ]; then
+            echo "::warning::エージェントがコミットメッセージを出力しなかったため、既定値を使います"
+            commit_message="feat: resolve #${ISSUE_NUMBER}"
+          fi
+          title="$(printf '%s\n' "$commit_message" | head -n 1)"
+
+          bot_login="${APP_SLUG}[bot]"
+          bot_id="$(gh api "/users/${bot_login}" --jq .id)"
+          git config user.name "$bot_login"
+          git config user.email "${bot_id}+${bot_login}@users.noreply.github.com"
+
+          branch="coding-agent/${AGENT_ID}/issue-${ISSUE_NUMBER}-${GITHUB_RUN_ID}"
+          git switch --create "$branch"
+          git apply --index --binary "$patch"
+          git commit --file - <<< "$commit_message"
+          git push origin "$branch"
+
+          body_file="$RUNNER_TEMP/pull-request-body.md"
+          {
+            if [ -n "$pull_request_body" ]; then
+              printf '%s\n\n' "$pull_request_body"
+            fi
+            printf 'Closes #%s\n\n' "$ISSUE_NUMBER"
+            printf -- '---\n🤖 この PR は %s が自動で作成しました ([ワークフロー](%s))\n' "$AGENT_NAME" "$RUN_URL"
+          } > "$body_file"
+
+          gh pr create \
+            --base "$BASE_BRANCH" \
+            --head "$branch" \
+            --title "$title" \
+            --body-file "$body_file"

@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "properties": {
+    "commit_message": {
+      "type": "string",
+      "description": "Conventional Commits 形式のコミットメッセージ。1 行目は `<type>: <概要>` とし、PR のタイトルにも使う"
+    },
+    "pull_request_body": {
+      "type": "string",
+      "description": "PR の説明 (Markdown)。変更内容の要約と、確認した内容や残っている課題を書く"
+    }
+  },
+  "required": ["commit_message", "pull_request_body"],
+  "additionalProperties": false
+}
