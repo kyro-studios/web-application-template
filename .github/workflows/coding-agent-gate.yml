@@ -1,0 +1,108 @@
+name: Coding Agent Gate
+
+on:
+  workflow_call:
+    inputs:
+      agent-id:
+        description: エージェントの識別子 (二重起動防止のマーカーに使う)
+        type: string
+        required: true
+      agent-name:
+        description: エージェントの表示名
+        type: string
+        required: true
+      assignee:
+        description: エージェントに対応する GitHub のログイン名
+        type: string
+        required: true
+      issue-number:
+        description: 手動実行時に対象とする Issue 番号
+        type: string
+        required: false
+        default: ''
+    outputs:
+      should-run:
+        description: エージェントを起動すべきなら 'true'
+        value: ${{ jobs.claim.outputs.claimed }}
+      issue-number:
+        description: 対象の Issue 番号
+        value: ${{ jobs.resolve.outputs.issue-number }}
+      issue-title:
+        description: 対象の Issue のタイトル
+        value: ${{ jobs.resolve.outputs.issue-title }}
+      issue-url:
+        description: 対象の Issue の URL
+        value: ${{ jobs.resolve.outputs.issue-url }}
+      task:
+        description: エージェントに渡すタスクの説明 (Markdown)
+        value: ${{ jobs.resolve.outputs.task }}
+
+permissions: {}
+
+jobs:
+  resolve:
+    name: 起動条件の判定
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    outputs:
+      ready: ${{ steps.resolve.outputs.ready }}
+      issue-number: ${{ steps.resolve.outputs.issue-number }}
+      issue-title: ${{ steps.resolve.outputs.issue-title }}
+      issue-url: ${{ steps.resolve.outputs.issue-url }}
+      task: ${{ steps.resolve.outputs.task }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: 対象の Issue を判定する
+        id: resolve
+        uses: actions/github-script@v9
+        env:
+          AGENT_NAME: ${{ inputs.agent-name }}
+          AGENT_ASSIGNEE: ${{ inputs.assignee }}
+          ISSUE_NUMBER: ${{ inputs.issue-number }}
+        with:
+          script: |
+            const { default: resolveTarget } = await import(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/coding-agent/resolve-target.mjs`
+            );
+            await resolveTarget({ github, context, core });
+
+  claim:
+    name: 二重起動の防止
+    needs: resolve
+    if: needs.resolve.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    # 複数の Sub Issue が同時に Close されても、同じ Issue に対する起動は 1 回に絞る
+    concurrency:
+      group: coding-agent-${{ inputs.agent-id }}-issue-${{ needs.resolve.outputs.issue-number }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      claimed: ${{ steps.claim.outputs.claimed }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: 起動済みの印を Issue に残す
+        id: claim
+        uses: actions/github-script@v9
+        env:
+          AGENT_ID: ${{ inputs.agent-id }}
+          AGENT_NAME: ${{ inputs.agent-name }}
+          ISSUE_NUMBER: ${{ needs.resolve.outputs.issue-number }}
+        with:
+          script: |
+            const { default: claimIssue } = await import(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/coding-agent/claim-issue.mjs`
+            );
+            await claimIssue({ github, context, core });
