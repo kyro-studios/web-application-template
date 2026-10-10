@@ -34,7 +34,7 @@
 
 仕組みは、特定のエージェントに依存しないように作る。「PR を作るのは Claude だけ」のような前提には頼らない。
 
-- エージェントは登録制にする。登録先は `.github/coding-agent/agents.json` とし、JSON Schema で形式を検証する
+- エージェントは登録制にする。登録先は `.github/coding-agent/agents.json` とし、JSON Schema (`agents-schema.json`) で形式を検証する。Schema で表せない関係 (担当が登録済みか、レビュー担当が作成担当と別か、Bot 名などがエージェントどうしで重複していないか) は、設定を読み込むスクリプトで検証する
 - どの段階をどのエージェントが担当するかも、同じファイルで決める
 - PR の作成者やレビューの投稿者がどのエージェントかは、GitHub App の Bot 名から引き当てる
 
@@ -96,6 +96,20 @@ flowchart LR
 - **共通の書き込みジョブ**: 出力を受け取り、`agents.json` で引いた担当の GitHub App のトークンで、push と PR の作成を行う。PR の本文に `Closes #N` を入れるのもこのジョブで、どのエージェントでも確実に入るようにする
 
 エージェントを追加するときは、この形式に従ったワークフローを 1 つ書き、`agents.json` に登録する。
+
+`workflow_dispatch` の入力は文字列しか渡せず、数にも上限がある。そのため、振り分け用のワークフローは、エージェントに渡す資料を含む依頼の全体を、Artifact (`coding-agent-requests`) に `<依頼の識別子>.json` として保存する。エージェントのワークフローには、それを取りに行くための情報と、チェックアウトなどに必要な最小限の情報だけを入力として渡す。
+
+| 入力 | 内容 |
+| --- | --- |
+| `mode` | `create` (作成) か `fix` (修正) |
+| `stage` | 段階 (`specification`、`domain-model`、`architecture`、`planning`、`implementation`) |
+| `issue-number` | 対象の Issue の番号 |
+| `pull-request-number` | 修正の対象の PR の番号。作成のときは空 |
+| `target-sha` | 作業を始めるコミット |
+| `request-run-id` | 依頼の Artifact を保存した、振り分け用のワークフローの実行の ID |
+| `request-id` | 依頼の識別子 (Artifact の中のファイル名) |
+
+エージェントのワークフローは、`request-run-id` を指定して Artifact をダウンロードし (`actions: read` の権限が必要)、`<request-id>.json` を読む。
 
 `workflow_call` では呼び出すファイルを `uses:` に固定で書く必要があり、設定ファイルから選べない。そのため、エージェントのワークフローは `workflow_dispatch` で呼び出す。
 
@@ -208,6 +222,7 @@ docs/features/<機能の親 Issue の番号>-<機能名>/
 
 ```json
 {
+  "featureRoot": "docs/features",
   "stages": {
     "requirements": { "allow": ["{featureDir}/requirements.md"] },
     "specification": { "allow": ["{featureDir}/specification.md"] },
@@ -215,13 +230,15 @@ docs/features/<機能の親 Issue の番号>-<機能名>/
     "architecture": { "allow": ["{featureDir}/architecture.md"] },
     "implementation": {
       "allow": ["**"],
-      "deny": [".github/**", "docs/features/**", "AGENTS.md", "CLAUDE.md", ".claude/**"]
+      "deny": [".github/**", "{featureRoot}/**", "AGENTS.md", "CLAUDE.md", ".claude/**"]
     }
   }
 }
 ```
 
-- `{featureDir}` は、機能の親 Issue の番号と機能名から決まるディレクトリ (`docs/features/<番号>-<機能名>`) に置き換える
+- `{featureRoot}` は `featureRoot` の値 (`docs/features`) に置き換える
+- `{featureDir}` は、機能の親 Issue の番号と機能名から決まるディレクトリ (`<featureRoot>/<番号>-<機能名>`) に置き換える
+- 機能名は、英小文字・数字とハイフンで、50 文字以内とする
 - 設計の段階では、その段階の成果物だけを変更できる
 - 実装タスクでは、変更するファイルを前もって決められないため、変更してはいけないファイルを決める
 
@@ -507,8 +524,8 @@ docs/features/<機能の親 Issue の番号>-<機能名>/
 
 | ファイル | 内容 |
 | --- | --- |
-| `.github/coding-agent/agents.json` | エージェントの登録と、段階ごとの担当 (2.1) |
-| `.github/coding-agent/stages.json` | 段階ごとに変更してよいファイル (5.1) |
+| `.github/coding-agent/agents.json` | エージェントの登録と、段階ごとの担当 (2.1)。形式は `agents-schema.json` |
+| `.github/coding-agent/stages.json` | 段階ごとに変更してよいファイル (5.1)。形式は `stages-schema.json` |
 | `.github/coding-agent/ci.json` | CI とみなすワークフロー (9.2) |
 | `.github/coding-agent/review-schema.json` | レビュー担当の出力の形式 (8.6) |
 | `.github/coding-agent/prompts/review/<段階>.md` | 段階ごとのレビューの指示 (8.4) |
