@@ -420,7 +420,8 @@ docs/features/<機能の親 Issue の番号>-<機能名>/
 
 ### 9.2 CI の失敗の検知
 
-- CI とみなすワークフローを `.github/coding-agent/ci.json` に名前で登録する。`workflow_run` は対象のワークフローを名前で指定する必要があるため
+- CI の失敗を検知する専用のワークフロー (`.github/workflows/coding-agent-ci-failure.yml`) を用意し、その `on.workflow_run.workflows` に、CI とみなすワークフローを名前で登録する
+  - `workflow_run` は、対象のワークフローを YAML に固定の名前で書く必要があり、設定ファイルからは指定できない。そのため、CI を登録するときに編集するのは、この専用のワークフローの数行だけにする
 - `workflow_run` の `completed` で、次のすべてを満たすものを検知する
   - `conclusion` が `failure`
   - 元のイベントが `pull_request`
@@ -497,10 +498,21 @@ docs/features/<機能の親 Issue の番号>-<機能名>/
 - CI のワークフローを `merge_group` イベントでも起動する。Merge Queue は、他の PR とあわせた状態でテストする
 - Codex のレビューは `merge_group` では起動しない
 - 「マージ前にブランチを最新にする」の設定は使わない (Merge Queue が同じ役割を果たすため)
+- マージの方法は squash にする。エージェントの PR は作成のコミットに修正のコミットが積み重なるが、`develop` には Issue ごとに 1 つのコミットが残る
+  - squash のコミットメッセージは、PR のタイトルだけにする (リポジトリの設定の `squash_merge_commit_title` を `PR_TITLE`、`squash_merge_commit_message` を `BLANK` にする)。PR の説明は 1 行が長く、commitlint の本文の行の長さの上限を超えることがあるため
+  - そのため、commitlint のワークフローでは PR のタイトルも検証する
+- 必須にするステータスチェックは、次の 2 つを満たすものにする
+  - パスの条件で起動を絞っていない。条件に合わない PR ではチェックが報告されず、いつまでも待ち続けてしまうため
+  - `merge_group` イベントでも動く。Merge Queue のテストで報告されないと、キューが進まないため
+- テンプレートに含まれる `commitlint` は、この 2 つを満たしており、既定で必須にする。アプリケーションの CI は、テンプレートから作った後に各リポジトリで用意し、セットアップのスクリプトの引数で必須のチェックに加える
 
 ### 11.2 `main`
 
 人だけがマージできるように保護する。`main` へのマージは、人が `develop` から PR を作って行う。
+
+- ルールセットの「更新の制限 (Restrict updates)」で、`main` の更新を例外として指定した人だけに限定する。エージェントの GitHub App は書き込み権限を持つため、ワークフローの誤りなどで `main` を更新しないよう、仕組みで防ぐ
+- 例外は、Organization のオーナーと、セットアップのスクリプトで指定した Team とする。どちらも PR を通した更新だけを許可する (`bypass_mode` を `pull_request` にする)
+  - リポジトリのロール (Maintain など) を例外にするには、ロールの数値の ID が必要だが、公式のドキュメントで値を確認できないため使わない
 
 ## 12. セキュリティ
 
@@ -526,7 +538,7 @@ docs/features/<機能の親 Issue の番号>-<機能名>/
 | --- | --- |
 | `.github/coding-agent/agents.json` | エージェントの登録と、段階ごとの担当 (2.1)。形式は `agents-schema.json` |
 | `.github/coding-agent/stages.json` | 段階ごとに変更してよいファイル (5.1)。形式は `stages-schema.json` |
-| `.github/coding-agent/ci.json` | CI とみなすワークフロー (9.2) |
+| `.github/workflows/coding-agent-ci-failure.yml` | CI とみなすワークフロー。`on.workflow_run.workflows` に名前で登録する (9.2) |
 | `.github/coding-agent/review-schema.json` | レビュー担当の出力の形式 (8.6) |
 | `.github/coding-agent/prompts/review/<段階>.md` | 段階ごとのレビューの指示 (8.4) |
 
@@ -536,11 +548,26 @@ docs/features/<機能の親 Issue の番号>-<機能名>/
 
 テンプレートから作ったときに引き継がれないものは、利用するリポジトリの管理者が、セットアップのスクリプトを一度実行して用意する。
 
-- スクリプトは `gh` コマンドで実行する。ルールセットや既定ブランチの変更には管理者の権限が必要なため、ワークフローではなく、管理者が手元で実行する
+- スクリプトは `.github/scripts/coding-agent/setup-repository.mjs` で、`gh` コマンドにログインした状態で実行する。ルールセットや既定ブランチの変更には管理者の権限が必要なため、ワークフローではなく、管理者が手元で実行する
+- 何度実行しても同じ状態になるようにする。ラベルやルールセットが既にあれば更新する
+- Organization が所有する public リポジトリでなければ、何もせずに終わる (Merge Queue を使うため)
 - スクリプトで行うことは、次のとおり
   - `develop` の作成と、既定ブランチの変更 (1 章)
+  - リポジトリの設定: 自動マージを有効にする、squash のコミットメッセージを PR のタイトルだけにする、マージしたブランチを自動で削除する (11.1)
   - ラベルの作成 (`feature`、`stage:*`、`needs-human`)
   - `develop` と `main` のルールセット (Merge Queue を含む) の設定 (11 章)
+
+```bash
+node .github/scripts/coding-agent/setup-repository.mjs --repo <owner>/<name> [--required-check <名前>]... [--main-bypass-team <slug>]... [--dry-run]
+```
+
+| オプション | 内容 |
+| --- | --- |
+| `--repo` | セットアップするリポジトリ |
+| `--required-check` | `develop` で必須にするステータスチェック。複数指定できる。省略すると `commitlint` だけを必須にする |
+| `--main-bypass-team` | `main` を更新できる Team。複数指定できる。Organization のオーナーは常に更新できる |
+| `--dry-run` | 変更の内容を表示するだけで、変更しない |
+
 - 次のものは、スクリプトの対象外とし、手順書で案内する
   - GitHub App の作成とインストール、マシンユーザーの用意 (2.1、2.3)
   - 1Password のサービスアカウントと、Secrets の `OP_SERVICE_ACCOUNT_TOKEN`
@@ -569,7 +596,7 @@ Variables は、次のように整理する。
 
 作る順番は、次のとおり。各段階で動作を確認しながら進める。
 
-1. 土台: `agents.json`、`stages.json`、`ci.json` とそれぞれの Schema、設定の読み込みと検証、テスト、振り分け用のワークフローの骨組み
+1. 土台: `agents.json`、`stages.json` とそれぞれの Schema、設定の読み込みと検証、テスト、振り分け用のワークフローの骨組み
 2. セットアップ: セットアップのスクリプト (14 章)。以降の動作確認に使う確認用のリポジトリを用意する
 3. 機能の開始: Issue フォーム、段階の Issue の作成、Issue の Close
 4. 作成: Claude 用のワークフロー (文書の段階の作成) と、共通の書き込みジョブ
