@@ -598,6 +598,7 @@ Variables は、次のように整理する。
 
 1. 土台: `agents.json`、`stages.json` とそれぞれの Schema、設定の読み込みと検証、テスト、振り分け用のワークフローの骨組み
 2. セットアップ: セットアップのスクリプト (14 章)。以降の動作確認に使う確認用のリポジトリを用意する
+   - テンプレートの変更は、`.github/scripts/coding-agent/sync-sandbox.mjs` で確認用のリポジトリの `develop` に取り込む。`develop` はルールセットで保護されているため、取り込みを push する間だけルールセットを無効にし、必ず有効に戻す
 3. 機能の開始: Issue フォーム、段階の Issue の作成、Issue の Close
 4. 作成: Claude 用のワークフロー (文書の段階の作成) と、共通の書き込みジョブ
 5. レビュー: レビュー対象の判定、Codex のレビュー、Approve と Merge Queue へのマージ
