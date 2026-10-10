@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { parseOptions, syncCommitMessage } from './sync-sandbox.mjs';
 
@@ -8,8 +9,10 @@ describe('parseOptions', () => {
       template: 'kyro-studios/template',
       sandbox: 'kyro-studios/sandbox',
       ref: 'main',
+      agents: undefined,
     });
     assert.equal(parseOptions(['--template=a/t', '--sandbox=a/s', '--ref=feature/x']).ref, 'feature/x');
+    assert.equal(parseOptions(['--template=a/t', '--sandbox=a/s', '--agents=agents.json']).agents, resolve('agents.json'));
   });
 
   it('リポジトリやブランチの指定が正しくなければ失敗する', () => {
