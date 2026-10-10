@@ -5,32 +5,10 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createRouter, eventKey } from './route.mjs';
+import { createFakeCore } from './testing/fake-github.mjs';
 
 const ROOT_DIR = fileURLToPath(new URL('../../../', import.meta.url));
 const SHA = '0123456789abcdef0123456789abcdef01234567';
-
-/**
- * actions/github-script の core のうち、振り分けで使うものを記録する。
- */
-function createCore() {
-  /** @type {Record<string, string>} */
-  const outputs = {};
-  /** @type {string[]} */
-  const failures = [];
-  return {
-    outputs,
-    failures,
-    /** @param {string} name @param {string} value */
-    setOutput: (name, value) => {
-      outputs[name] = value;
-    },
-    /** @param {string} message */
-    setFailed: (message) => {
-      failures.push(message);
-    },
-    info: () => {},
-  };
-}
 
 /**
  * @param {string} eventName
@@ -59,13 +37,12 @@ function createRequest(overrides = {}) {
 }
 
 /**
- * @param {ReturnType<typeof createRouter>} route
+ * @param {(args: any) => Promise<void>} step
  * @param {ReturnType<typeof createContext>} context
  */
-async function runRoute(route, context) {
-  const core = createCore();
-  // @ts-expect-error テストに必要な部分だけを渡す
-  await route({ github: {}, context, core });
+async function runStep(step, context) {
+  const core = createFakeCore();
+  await step({ github: {}, context, core });
   return core;
 }
 
@@ -73,6 +50,56 @@ describe('eventKey', () => {
   it('アクションがあればイベント名とつなげる', () => {
     assert.equal(eventKey(createContext('issues', 'opened')), 'issues.opened');
     assert.equal(eventKey(createContext('workflow_dispatch')), 'workflow_dispatch');
+  });
+});
+
+describe('match', () => {
+  /** @type {string | undefined} */
+  let savedWorkspace;
+
+  beforeEach(() => {
+    savedWorkspace = process.env.GITHUB_WORKSPACE;
+    process.env.GITHUB_WORKSPACE = ROOT_DIR;
+  });
+
+  afterEach(() => {
+    if (savedWorkspace === undefined) {
+      delete process.env.GITHUB_WORKSPACE;
+    } else {
+      process.env.GITHUB_WORKSPACE = savedWorkspace;
+    }
+  });
+
+  it('処理するハンドラーがあれば、進行役の GitHub App の設定を出力する', async () => {
+    const { match } = createRouter([
+      { name: 'skip', events: ['issues.closed'], matches: async () => false, run: async () => [] },
+      { name: 'handle', events: ['issues.closed'], run: async () => [] },
+    ]);
+
+    const core = await runStep(match, createContext('issues', 'closed'));
+
+    assert.equal(core.outputs.handled, 'true');
+    assert.equal(core.outputs['coordinator-client-id'], 'your-coordinator-app-client-id');
+    assert.equal(core.outputs['coordinator-private-key-ref'], 'op://CI/Coordinator App/private key');
+  });
+
+  it('処理するハンドラーが無ければ、何も出力しない', async () => {
+    const { match } = createRouter([
+      { name: 'skip', events: ['issues.closed'], matches: async () => false, run: async () => [] },
+    ]);
+
+    assert.equal((await runStep(match, createContext('issues', 'closed'))).outputs.handled, 'false');
+    assert.equal((await runStep(match, createContext('issues', 'opened'))).outputs.handled, 'false');
+  });
+
+  it('設定に問題があれば失敗する', async () => {
+    process.env.GITHUB_WORKSPACE = tmpdir();
+    const { match } = createRouter([{ name: 'handle', events: ['issues.closed'], run: async () => [] }]);
+
+    const core = await runStep(match, createContext('issues', 'closed'));
+
+    assert.equal(core.outputs.handled, 'false');
+    assert.match(core.failures[0], /Coding Agent の設定に問題があります/);
   });
 });
 
@@ -100,23 +127,34 @@ describe('route', () => {
     await rm(requestDir, { recursive: true, force: true });
   });
 
-  it('ハンドラーの無いイベントでは何もしない', async () => {
-    const core = await runRoute(createRouter({}), createContext('issues', 'opened'));
-    assert.equal(core.outputs.dispatches, '[]');
-    assert.deepEqual(core.failures, []);
-  });
-
-  it('依頼を保存し、担当エージェントのワークフローの呼び出し方を出力する', async () => {
-    const route = createRouter({
-      'issues.closed': async ({ config }) => {
-        assert.ok(config.agents.agents.claude);
-        return [createRequest(), createRequest({ id: 'issue-13', issueNumber: 13 })];
+  it('処理するハンドラーをすべて実行し、依頼を保存して、担当エージェントのワークフローの呼び出し方を出力する', async () => {
+    /** @type {string[]} */
+    const called = [];
+    const { route } = createRouter([
+      {
+        name: 'first',
+        events: ['issues.closed'],
+        run: async ({ config }) => {
+          called.push('first');
+          assert.ok(config.agents.agents.claude);
+          return [createRequest()];
+        },
       },
-    });
+      { name: 'skip', events: ['issues.closed'], matches: async () => false, run: async () => [createRequest({ id: 'skip' })] },
+      {
+        name: 'second',
+        events: ['issues.closed'],
+        run: async () => {
+          called.push('second');
+          return [createRequest({ id: 'issue-13', issueNumber: 13 })];
+        },
+      },
+    ]);
 
-    const core = await runRoute(route, createContext('issues', 'closed'));
+    const core = await runStep(route, createContext('issues', 'closed'));
 
     assert.deepEqual(core.failures, []);
+    assert.deepEqual(called, ['first', 'second']);
     const dispatches = JSON.parse(core.outputs.dispatches);
     assert.deepEqual(
       dispatches.map((/** @type {{ requestId: string, workflow: string }} */ dispatch) => [dispatch.requestId, dispatch.workflow]),
@@ -129,31 +167,35 @@ describe('route', () => {
     assert.deepEqual((await readdir(requestDir)).sort(), ['issue-12.json', 'issue-13.json']);
   });
 
-  it('依頼に 1 件でも問題があれば、どのエージェントも呼び出さない', async () => {
-    const route = createRouter({
-      'issues.closed': async () => [
-        createRequest(),
-        createRequest({ id: 'issue-13', agent: 'jules' }),
-        createRequest({ id: 'issue-12', issueNumber: 14 }),
-      ],
-    });
+  it('依頼が無ければ、何も保存しない', async () => {
+    const { route } = createRouter([{ name: 'handle', events: ['issues.closed'], run: async () => [] }]);
 
-    const core = await runRoute(route, createContext('issues', 'closed'));
+    const core = await runStep(route, createContext('issues', 'closed'));
+
+    assert.equal(core.outputs.dispatches, '[]');
+    assert.deepEqual(core.failures, []);
+    assert.deepEqual(await readdir(requestDir), []);
+  });
+
+  it('依頼に 1 件でも問題があれば、どのエージェントも呼び出さない', async () => {
+    const { route } = createRouter([
+      {
+        name: 'handle',
+        events: ['issues.closed'],
+        run: async () => [
+          createRequest(),
+          createRequest({ id: 'issue-13', agent: 'jules' }),
+          createRequest({ id: 'issue-12', issueNumber: 14 }),
+        ],
+      },
+    ]);
+
+    const core = await runStep(route, createContext('issues', 'closed'));
 
     assert.equal(core.outputs.dispatches, '[]');
     assert.equal(core.failures.length, 1);
     assert.match(core.failures[0], /issue-13: エージェント "jules" は登録されていません/);
     assert.match(core.failures[0], /issue-12: 依頼の識別子が重複しています/);
     assert.deepEqual(await readdir(requestDir), []);
-  });
-
-  it('設定に問題があれば失敗する', async () => {
-    process.env.GITHUB_WORKSPACE = requestDir;
-    const route = createRouter({ 'issues.closed': async () => [createRequest()] });
-
-    const core = await runRoute(route, createContext('issues', 'closed'));
-
-    assert.equal(core.outputs.dispatches, '[]');
-    assert.match(core.failures[0], /Coding Agent の設定に問題があります/);
   });
 });
