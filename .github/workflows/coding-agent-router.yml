@@ -1,0 +1,88 @@
+name: Coding Agent Router
+
+on:
+  issues:
+    types: [opened, assigned, closed]
+  workflow_dispatch:
+    inputs:
+      issue-number:
+        description: 対象の Issue 番号
+        type: string
+        required: true
+      force:
+        description: 起動済みでも再実行する
+        type: boolean
+        required: false
+        default: false
+
+permissions: {}
+
+jobs:
+  route:
+    name: 振り分け
+    # テンプレート自体や、セットアップ前のリポジトリでは、ランナーを起動せずに終える
+    if: vars.CODING_AGENT_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    outputs:
+      dispatches: ${{ steps.route.outputs.dispatches }}
+    steps:
+      # cone モードでは、ルート直下のファイル (package.json など) もチェックアウトされる
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github
+          persist-credentials: false
+
+      # postinstall の husky の初期化を動かさないよう、スクリプトを実行せずにインストールする
+      - name: 依存パッケージをインストールする
+        run: npm ci --ignore-scripts
+
+      - name: 振り分ける
+        id: route
+        uses: actions/github-script@v9
+        env:
+          REQUEST_DIR: ${{ runner.temp }}/coding-agent-requests
+        with:
+          script: |
+            const { default: route } = await import(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/coding-agent/route.mjs`
+            );
+            await route({ github, context, core });
+
+      - name: エージェントへの依頼を保存する
+        if: steps.route.outputs.dispatches != '[]'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coding-agent-requests
+          path: ${{ runner.temp }}/coding-agent-requests
+          retention-days: 7
+
+  dispatch:
+    name: エージェントの呼び出し
+    needs: route
+    if: needs.route.outputs.dispatches != '' && needs.route.outputs.dispatches != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: エージェントのワークフローを手動実行する
+        uses: actions/github-script@v9
+        env:
+          DISPATCHES: ${{ needs.route.outputs.dispatches }}
+        with:
+          script: |
+            const { default: dispatchAgents } = await import(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/coding-agent/dispatch-agents.mjs`
+            );
+            await dispatchAgents({ github, context, core });
