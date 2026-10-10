@@ -26,7 +26,16 @@ import Ajv2020 from 'ajv/dist/2020.js';
  */
 
 /**
+ * 進行役の GitHub App。振り分け用のワークフローの書き込み (段階の Issue の作成など) に使う
+ * @typedef {object} Coordinator
+ * @property {string} bot GitHub App の Bot 名 (<slug>[bot])
+ * @property {string} appClientId GitHub App の Client ID
+ * @property {string} appPrivateKeyRef GitHub App の秘密鍵の 1Password の参照
+ */
+
+/**
  * @typedef {object} AgentsConfig
+ * @property {Coordinator} coordinator 進行役の GitHub App
  * @property {Record<string, Agent>} agents 登録するエージェント (キーは識別子)
  * @property {{ author: Record<AuthoredStage, string>, implementers: string[], reviewer: string }} roles 段階ごとの担当
  */
@@ -161,6 +170,14 @@ export function validateAgentRelations(config) {
     errors.push(`agents.json: roles.reviewer の "${config.roles.reviewer}" は、作成担当 (roles.author) や実装担当 (roles.implementers) と別のエージェントにしてください`);
   }
 
+  // 段階の Issue は作成者 (進行役の Bot) で見分けるため、エージェントの Bot と同じにしない
+  const coordinatorBot = config.coordinator.bot.toLowerCase();
+  for (const [agentId, agent] of Object.entries(config.agents)) {
+    if (agent.bot.toLowerCase() === coordinatorBot) {
+      errors.push(`agents.json: coordinator と "${agentId}" の bot が同じです`);
+    }
+  }
+
   // Bot 名と Assignee からエージェントを引き当てるため、エージェントどうしで重複させない
   for (const field of /** @type {const} */ (['bot', 'assignee', 'workflow'])) {
     /** @type {Map<string, string>} */
@@ -177,6 +194,18 @@ export function validateAgentRelations(config) {
   }
 
   return errors;
+}
+
+/**
+ * アカウントが進行役の GitHub App の Bot か判定する。
+ *
+ * @param {AgentsConfig} config
+ * @param {string | null | undefined} login 判定するアカウントのログイン名
+ * @returns {boolean}
+ */
+export function isCoordinator(config, login) {
+  // GitHub のログイン名は大文字と小文字を区別しない
+  return typeof login === 'string' && login.toLowerCase() === config.coordinator.bot.toLowerCase();
 }
 
 /**

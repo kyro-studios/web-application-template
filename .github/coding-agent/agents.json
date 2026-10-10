@@ -1,5 +1,10 @@
 {
   "$schema": "./agents-schema.json",
+  "coordinator": {
+    "bot": "your-coordinator-app[bot]",
+    "appClientId": "your-coordinator-app-client-id",
+    "appPrivateKeyRef": "op://CI/Coordinator App/private key"
+  },
   "agents": {
     "claude": {
       "name": "Claude Code",
