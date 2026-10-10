@@ -1,0 +1,45 @@
+name: Coding Agent Scripts
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - .github/coding-agent/**
+      - .github/scripts/**
+      - .github/workflows/coding-agent-scripts.yml
+      - package.json
+      - package-lock.json
+  pull_request:
+    paths:
+      - .github/coding-agent/**
+      - .github/scripts/**
+      - .github/workflows/coding-agent-scripts.yml
+      - package.json
+      - package-lock.json
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: テスト
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # node --test に glob を渡すため、Node.js 22 以降を使う
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      # postinstall の husky の初期化を動かさないよう、スクリプトを実行せずにインストールする
+      - name: 依存パッケージをインストールする
+        run: npm ci --ignore-scripts
+
+      # 設定ファイル (agents.json と stages.json) の検証も、このテストに含まれる
+      - name: テストを実行する
+        run: npm test
