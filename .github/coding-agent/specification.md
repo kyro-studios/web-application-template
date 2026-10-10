@@ -40,6 +40,11 @@
 
 ```json
 {
+  "coordinator": {
+    "bot": "example-coordinator-app[bot]",
+    "appClientId": "Iv23li...",
+    "appPrivateKeyRef": "op://CI/Coordinator App/private key"
+  },
   "agents": {
     "claude": {
       "name": "Claude Code",
@@ -67,6 +72,7 @@
 
 | 項目 | 内容 |
 | --- | --- |
+| `coordinator` | 進行役の GitHub App の Bot 名、Client ID、秘密鍵の 1Password の参照 (2.3) |
 | `assignee` | Issue に Assign するアカウント。GitHub App の Bot は Assignee にできないため、マシンユーザーを使う |
 | `bot` | GitHub App の Bot 名 |
 | `workflow` | そのエージェントを動かすワークフローのファイル名 |
@@ -116,6 +122,12 @@ flowchart LR
 ### 2.3 GitHub App
 
 - GitHub App はエージェントごとに用意し、`agents.json` に登録する
+- エージェントとは別に、進行役 (coordinator) の GitHub App を 1 つ用意し、`agents.json` の `coordinator` に登録する
+  - 振り分け用のワークフローの書き込み (段階の Issue の作成、ラベル付け、Assign、親 Issue の Close、実装タスクの Issue の作成) に使う。必要な権限は Issues の読み書き
+  - 「自分たちの GitHub App が作った Issue」は、進行役の App の Bot が作った Issue を指す。エージェントの App を使い回さないのは、エージェントを差し替えても、段階の Issue を見分ける基準が変わらないようにするため
+  - 進行役の App のトークンを使うのは、振り分け用のワークフローの決まった処理だけで、LLM には渡さない
+  - 振り分け用のワークフローは、まず読み取り専用の GITHUB_TOKEN で処理するイベントか判定し、処理するときだけ進行役の App のトークンを発行する
+  - 進行役の App の Bot 名は、どのエージェントの Bot 名とも別にする。`agents.json` の検証で確認する
   - PR の作成者は、自分の PR を Approve できない。作成担当とレビュー担当の App を分けることで、レビュー担当が Approve できるようにする
   - そのため、`roles.reviewer` のエージェントは、`roles.author` と `roles.implementers` のどのエージェントとも別にする。`agents.json` の検証で確認する
 - エージェントには、読み取り専用のトークンだけを渡す。書き込みは、エージェントの出力を受け取った別のジョブが、GitHub App のトークンで行う
@@ -174,7 +186,7 @@ flowchart TD
 - 担当に渡す資料は、README の擬似コードの引数に対応する。修正のときも、作成のときと同じ資料と指摘内容を渡す
 
 - 実装計画にレビューが無いのは意図どおり (README の要件のとおり)
-- 段階の種類は、`stage:*` ラベルと「Issue の作成者が自分たちの GitHub App であること」の組み合わせで判定する。Issue の作成者は後から変えられないため、人が別の Issue に段階のラベルを付けても、段階の Issue としては扱わない
+- 段階の種類は、`stage:*` ラベルと「Issue の作成者が進行役の GitHub App (2.3) であること」の組み合わせで判定する。Issue の作成者は後から変えられないため、人が別の Issue に段階のラベルを付けても、段階の Issue としては扱わない
 
 ### 4.3 機能の開始
 
@@ -184,9 +196,15 @@ flowchart TD
 2. `feature` ラベルの付いた Issue の作成をきっかけに、ワークフローが起動する
    - 書き込み権限の無いユーザーが作った Issue では起動しない
    - Issue の本文から機能名を取り出し、形式を確認する。フォームでは形式を確認できず、API や `gh` コマンドではフォームを通らずに Issue を作れるため、ワークフローでも確認する。形式が正しくなければ段階の Issue を作らず、親 Issue にコメントで知らせる
-3. ワークフローが、5 つの段階の Issue をまとめて作成する
+   - 本文が編集されたときも、段階の Issue をまだ作っていなければ、改めて処理する。機能名を直して本文を保存すれば、段階の Issue が作られる
+   - 段階の Issue を作り始めた後は、本文を編集しても何もしない (成果物のディレクトリを変えないため)
+3. ワークフローが、進行役の GitHub App で 5 つの段階の Issue をまとめて作成する
+   - タイトルは `<段階の名前>: <機能の親 Issue のタイトル>`、本文には作業内容、成果物のパス、参考資料 (前の段階の成果物のパス) を書く
    - 機能の親 Issue の Sub Issue にし、Blocked by で順につなぐ
-   - 各段階の担当を Assign する
+   - 最後に各段階の担当を Assign する。Assign できなかった場合 (コラボレーターでないなど) は、ワークフローに警告を出す
+   - 作成した段階の Issue の一覧を、機能の親 Issue にコメントする
+   - 作成済みの段階の Issue や関係は飛ばすため、途中で失敗しても、もう一度処理すれば続きから作成する
+   - 同じ Issue のイベントは 1 つずつ処理し、段階の Issue を二重に作らないようにする
 
 段階の Issue を最初にまとめて作り、担当も Assign しておく。あとは「依存先がすべて Close されたら起動する」判定だけで、段階が順に進む。
 
@@ -197,6 +215,9 @@ flowchart TD
 - 機能の親 Issue は、すべての段階の Issue が Close されたら、ワークフローが Close する。この状態を「機能の実装が完了した」とみなす
 
 GitHub は、Sub Issue がすべて Close されても親 Issue を自動では Close しないため、ワークフローで Close する。
+
+- Issue が Close されたら、その親 Issue を判定する。親 Issue が実装計画の Issue (進行役の App が作ったもの) か機能の親 Issue で、Sub Issue がすべて Close されていれば、コメントを残して Close する
+- 実装計画の Issue を Close すると、そのイベントで機能の親 Issue が改めて判定される
 
 ## 5. 成果物の配置
 
@@ -302,7 +323,7 @@ docs/features/<機能の親 Issue の番号>-<機能名>/
 2. PR が Close する Issue (GraphQL の `closingIssuesReferences`) がちょうど 1 件である
    - 0 件なら、通常の PR として何もしない
    - 2 件以上なら、PR にコメントで知らせる
-3. その Issue の作成者が自分たちの GitHub App で、`stage:*` ラベルが付いている
+3. その Issue の作成者が進行役の GitHub App で、`stage:*` ラベルが付いている
 4. 変更されたファイルが、段階ごとに決めた範囲 (5.1) に収まっている
    - 例: 要件定義の PR では `docs/features/<親 Issue の番号>-<機能名>/requirements.md` だけ
    - 範囲外のファイルが変更されていたら、Codex を呼ばずに差し戻す。機械的に判定でき、API の料金もかからない
@@ -599,6 +620,7 @@ Variables は、次のように整理する。
 1. 土台: `agents.json`、`stages.json` とそれぞれの Schema、設定の読み込みと検証、テスト、振り分け用のワークフローの骨組み
 2. セットアップ: セットアップのスクリプト (14 章)。以降の動作確認に使う確認用のリポジトリを用意する
    - テンプレートの変更は、`.github/scripts/coding-agent/sync-sandbox.mjs` で確認用のリポジトリの `develop` に取り込む。`develop` はルールセットで保護されているため、取り込みを push する間だけルールセットを無効にし、必ず有効に戻す
+   - 確認用のリポジトリに固有の設定 (`agents.json`) は、テンプレートの内容で置き換えずに残す
 3. 機能の開始: Issue フォーム、段階の Issue の作成、Issue の Close
 4. 作成: Claude 用のワークフロー (文書の段階の作成) と、共通の書き込みジョブ
 5. レビュー: レビュー対象の判定、Codex のレビュー、Approve と Merge Queue へのマージ
