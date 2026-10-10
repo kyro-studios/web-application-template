@@ -6,6 +6,7 @@
  * - AGENT_ID: マーカーに埋め込むエージェントの識別子
  * - AGENT_NAME: コメントに表示するエージェント名
  * - ISSUE_NUMBER: 対象の Issue 番号
+ * - FORCE: 'true' なら起動済みでも再実行する
  */
 
 /**
@@ -35,8 +36,7 @@ export default async function claimIssue({ github, context, core }) {
   const issueNumber = Number.parseInt(process.env.ISSUE_NUMBER ?? '', 10);
   const marker = `<!-- coding-agent-launch:${agentId} -->`;
 
-  // 手動実行は再実行の意図があるものとみなし、起動済みかどうかを確認しない
-  if (context.eventName !== 'workflow_dispatch') {
+  if (process.env.FORCE !== 'true') {
     /** @type {IssueComment[]} */
     const comments = await github.paginate(github.rest.issues.listComments, {
       ...context.repo,
@@ -48,7 +48,7 @@ export default async function claimIssue({ github, context, core }) {
     );
 
     if (launched) {
-      core.notice(`${agentName} は Issue #${issueNumber} に対して起動済みのため、スキップします (再実行する場合は手動実行してください)`);
+      core.notice(`${agentName} は Issue #${issueNumber} に対して起動済みのため、スキップします (再実行する場合は force を有効にして手動実行してください)`);
       return;
     }
   }

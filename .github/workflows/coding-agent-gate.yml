@@ -20,6 +20,11 @@ on:
         type: string
         required: false
         default: ''
+      force:
+        description: 起動済みでも再実行するなら true
+        type: boolean
+        required: false
+        default: false
     outputs:
       should-run:
         description: エージェントを起動すべきなら 'true'
@@ -100,6 +105,7 @@ jobs:
           AGENT_ID: ${{ inputs.agent-id }}
           AGENT_NAME: ${{ inputs.agent-name }}
           ISSUE_NUMBER: ${{ needs.resolve.outputs.issue-number }}
+          FORCE: ${{ inputs.force }}
         with:
           script: |
             const { default: claimIssue } = await import(

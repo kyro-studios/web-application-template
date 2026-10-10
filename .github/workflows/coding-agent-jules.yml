@@ -6,9 +6,14 @@ on:
   workflow_dispatch:
     inputs:
       issue-number:
-        description: 対象の Issue 番号 (起動済みでも再実行する)
+        description: 対象の Issue 番号
         type: string
         required: true
+      force:
+        description: 起動済みでも再実行する
+        type: boolean
+        required: false
+        default: false
 
 permissions: {}
 
@@ -31,6 +36,7 @@ jobs:
       agent-name: Jules
       assignee: ${{ vars.JULES_ASSIGNEE }}
       issue-number: ${{ inputs.issue-number }}
+      force: ${{ inputs.force || false }}
 
   start-session:
     name: Jules のセッション開始
