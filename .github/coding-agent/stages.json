@@ -1,0 +1,22 @@
+{
+  "$schema": "./stages-schema.json",
+  "featureRoot": "docs/features",
+  "stages": {
+    "requirements": {
+      "allow": ["{featureDir}/requirements.md"]
+    },
+    "specification": {
+      "allow": ["{featureDir}/specification.md"]
+    },
+    "domain-model": {
+      "allow": ["{featureDir}/domain-model.md"]
+    },
+    "architecture": {
+      "allow": ["{featureDir}/architecture.md"]
+    },
+    "implementation": {
+      "allow": ["**"],
+      "deny": [".github/**", "{featureRoot}/**", "AGENTS.md", "CLAUDE.md", ".claude/**"]
+    }
+  }
+}

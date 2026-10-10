@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Coding Agent の段階ごとに変更してよいファイル",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "featureRoot": {
+      "description": "機能ごとのディレクトリを置くディレクトリ。{featureDir} は <featureRoot>/<機能の親 Issue の番号>-<機能名> に置き換わる",
+      "type": "string",
+      "pattern": "^[^/\\s][^\\s]*[^/\\s]$"
+    },
+    "stages": {
+      "description": "段階ごとに変更してよいファイル。PR を作らない実装計画 (planning) は含まない",
+      "type": "object",
+      "properties": {
+        "requirements": { "$ref": "#/$defs/stage" },
+        "specification": { "$ref": "#/$defs/stage" },
+        "domain-model": { "$ref": "#/$defs/stage" },
+        "architecture": { "$ref": "#/$defs/stage" },
+        "implementation": { "$ref": "#/$defs/stage" }
+      },
+      "required": ["requirements", "specification", "domain-model", "architecture", "implementation"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["featureRoot", "stages"],
+  "additionalProperties": false,
+  "$defs": {
+    "pattern": {
+      "description": "リポジトリのルートからの相対パスの glob。{featureRoot} と {featureDir} を使える",
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^/]"
+    },
+    "stage": {
+      "type": "object",
+      "properties": {
+        "allow": {
+          "description": "変更してよいファイル",
+          "type": "array",
+          "items": { "$ref": "#/$defs/pattern" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "deny": {
+          "description": "allow に当てはまっても変更してはいけないファイル",
+          "type": "array",
+          "items": { "$ref": "#/$defs/pattern" },
+          "uniqueItems": true
+        }
+      },
+      "required": ["allow"],
+      "additionalProperties": false
+    }
+  }
+}

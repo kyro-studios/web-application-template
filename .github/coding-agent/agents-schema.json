@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Coding Agent のエージェントの登録",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "agents": {
+      "description": "登録するエージェント。キーはエージェントの識別子",
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9-]{0,49}$"
+      },
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/agent"
+      }
+    },
+    "roles": {
+      "description": "段階ごとの担当",
+      "type": "object",
+      "properties": {
+        "author": {
+          "description": "段階ごとの作成担当",
+          "type": "object",
+          "properties": {
+            "specification": { "$ref": "#/$defs/agentId" },
+            "domain-model": { "$ref": "#/$defs/agentId" },
+            "architecture": { "$ref": "#/$defs/agentId" },
+            "planning": { "$ref": "#/$defs/agentId" }
+          },
+          "required": ["specification", "domain-model", "architecture", "planning"],
+          "additionalProperties": false
+        },
+        "implementers": {
+          "description": "実装計画で実装タスクに割り当ててよいエージェント",
+          "type": "array",
+          "items": { "$ref": "#/$defs/agentId" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "reviewer": {
+          "description": "レビュー担当",
+          "$ref": "#/$defs/agentId"
+        }
+      },
+      "required": ["author", "implementers", "reviewer"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["agents", "roles"],
+  "additionalProperties": false,
+  "$defs": {
+    "agentId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,49}$"
+    },
+    "onePasswordRef": {
+      "type": "string",
+      "pattern": "^op://[^/]+/[^/]+/.+$"
+    },
+    "agent": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "表示名",
+          "type": "string",
+          "minLength": 1
+        },
+        "assignee": {
+          "description": "Issue に Assign するアカウント (マシンユーザー) のログイン名",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$"
+        },
+        "bot": {
+          "description": "GitHub App の Bot 名 (<slug>[bot])",
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*\\[bot\\]$"
+        },
+        "workflow": {
+          "description": "エージェントを動かすワークフローのファイル名",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+\\.ya?ml$"
+        },
+        "appClientId": {
+          "description": "GitHub App の Client ID",
+          "type": "string",
+          "minLength": 1
+        },
+        "appPrivateKeyRef": {
+          "description": "GitHub App の秘密鍵の 1Password の参照",
+          "$ref": "#/$defs/onePasswordRef"
+        },
+        "apiKeyRef": {
+          "description": "エージェントの API キーの 1Password の参照",
+          "$ref": "#/$defs/onePasswordRef"
+        },
+        "model": {
+          "description": "エージェントが使うモデル。null ならエージェントの既定",
+          "type": ["string", "null"],
+          "minLength": 1
+        }
+      },
+      "required": ["name", "assignee", "bot", "workflow", "appClientId", "appPrivateKeyRef", "apiKeyRef"],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "$schema": "./agents-schema.json",
+  "agents": {
+    "claude": {
+      "name": "Claude Code",
+      "assignee": "your-claude-account",
+      "bot": "your-claude-app[bot]",
+      "workflow": "coding-agent-claude.yml",
+      "appClientId": "your-claude-app-client-id",
+      "appPrivateKeyRef": "op://CI/Claude App/private key",
+      "apiKeyRef": "op://CI/Anthropic/credential",
+      "model": null
+    },
+    "codex": {
+      "name": "Codex",
+      "assignee": "your-codex-account",
+      "bot": "your-codex-app[bot]",
+      "workflow": "coding-agent-codex.yml",
+      "appClientId": "your-codex-app-client-id",
+      "appPrivateKeyRef": "op://CI/Codex App/private key",
+      "apiKeyRef": "op://CI/OpenAI/credential",
+      "model": null
+    }
+  },
+  "roles": {
+    "author": {
+      "specification": "claude",
+      "domain-model": "claude",
+      "architecture": "claude",
+      "planning": "claude"
+    },
+    "implementers": ["claude"],
+    "reviewer": "codex"
+  }
+}
