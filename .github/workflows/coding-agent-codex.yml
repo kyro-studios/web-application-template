@@ -31,10 +31,12 @@ jobs:
       contents: read
       issues: write
       pull-requests: read
+      actions: write
     with:
       agent-id: codex
       agent-name: Codex
       assignee: ${{ vars.CODEX_ASSIGNEE }}
+      workflow-file: coding-agent-codex.yml
       issue-number: ${{ inputs.issue-number }}
       force: ${{ inputs.force || false }}
 
@@ -85,6 +87,9 @@ jobs:
           openai-api-key: ${{ steps.op.outputs.OPENAI_API_KEY }}
           # 作業ディレクトリ内の編集だけを許可する
           permission-profile: ':workspace'
+          # Issue を作成する GitHub App の Assign と、Issue ごとに起動し直す GitHub Actions を許可する
+          allow-bots: true
+          allow-bot-users: ${{ vars.CODING_AGENT_APP_SLUG }}
           output-schema-file: .github/coding-agent/result-schema.json
           output-file: ${{ runner.temp }}/coding-agent-result/result.json
           prompt: |

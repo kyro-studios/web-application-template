@@ -31,10 +31,12 @@ jobs:
       contents: read
       issues: write
       pull-requests: read
+      actions: write
     with:
       agent-id: jules
       agent-name: Jules
       assignee: ${{ vars.JULES_ASSIGNEE }}
+      workflow-file: coding-agent-jules.yml
       issue-number: ${{ inputs.issue-number }}
       force: ${{ inputs.force || false }}
 

@@ -31,10 +31,12 @@ jobs:
       contents: read
       issues: write
       pull-requests: read
+      actions: write
     with:
       agent-id: claude-code
       agent-name: Claude Code
       assignee: ${{ vars.CLAUDE_CODE_ASSIGNEE }}
+      workflow-file: coding-agent-claude-code.yml
       issue-number: ${{ inputs.issue-number }}
       force: ${{ inputs.force || false }}
 
@@ -90,6 +92,8 @@ jobs:
           anthropic_api_key: ${{ steps.op.outputs.ANTHROPIC_API_KEY }}
           # 読み取り専用の GITHUB_TOKEN を渡し、Claude GitHub App の書き込み可能なトークンを使わせない
           github_token: ${{ github.token }}
+          # Issue を作成する GitHub App の Assign と、Issue ごとに起動し直す GitHub Actions を許可する
+          allowed_bots: github-actions,${{ vars.CODING_AGENT_APP_SLUG }}
           claude_args: >-
             --allowedTools "Read,Edit,Write,Glob,Grep,Bash"
             --json-schema '${{ steps.schema.outputs.json }}'
