@@ -1,0 +1,535 @@
+# Coding Agent による開発フローの仕様
+
+この文書は、[README](../../README.md) の「開発フロー」に書かれた要件を、GitHub 上の仕組みとしてどう実現するかを定めた仕様です。
+
+- 要件は README の擬似コードで、この文書はそれを実現する方法を表します
+- 既存の実装からの移行の方針は「[既存の実装からの移行](#14-既存の実装からの移行)」にまとめています
+- 既存のワークフロー (`.github/workflows/coding-agent-*.yml`) は、この仕様を決める前に作ったものです。この仕様とは差異があり、今後この仕様に合わせて作り直します
+
+## 1. 前提
+
+- リポジトリは、GitHub Organization が所有する public リポジトリとする
+- 開発は Issue ドリブンで進める。どの作業も Issue から始まる
+- `develop` を既定ブランチにする。エージェントが扱うのは `develop` までで、`main` へのマージは人が行う
+  - `Closes #N` などのキーワードは、既定ブランチに向けた PR でしか働かない。PR と Issue を確実につなぐため、`develop` を既定ブランチにする
+
+## 2. 役割
+
+| 役割 | 担当 | 内容 |
+| --- | --- | --- |
+| 人 | 機能の親 Issue の作成者 | 要件定義書の作成と修正、レビューが上限を超えたときの対応、`main` へのマージ |
+| 作成担当 | Claude | 仕様書、概念モデル、アーキテクチャ設計、実装計画、実装と、それぞれの修正 |
+| レビュー担当 | Codex | 成果物と実装のレビュー、PR の Approve とマージ |
+
+### 2.1 エージェントの登録
+
+仕組みは、特定のエージェントに依存しないように作る。「PR を作るのは Claude だけ」のような前提には頼らない。
+
+- エージェントは登録制にする。登録先は `.github/coding-agent/agents.json` とし、JSON Schema で形式を検証する
+- どの段階をどのエージェントが担当するかも、同じファイルで決める
+- PR の作成者やレビューの投稿者がどのエージェントかは、GitHub App の Bot 名から引き当てる
+
+```json
+{
+  "agents": {
+    "claude": {
+      "name": "Claude Code",
+      "assignee": "example-claude",
+      "bot": "example-claude-app[bot]",
+      "workflow": "coding-agent-claude.yml",
+      "appClientId": "Iv23li...",
+      "appPrivateKeyRef": "op://CI/Claude App/private key",
+      "apiKeyRef": "op://CI/Anthropic/credential"
+    },
+    "codex": { "...": "..." }
+  },
+  "roles": {
+    "author": {
+      "specification": "claude",
+      "domain-model": "claude",
+      "architecture": "claude",
+      "planning": "claude"
+    },
+    "implementers": ["claude"],
+    "reviewer": "codex"
+  }
+}
+```
+
+| 項目 | 内容 |
+| --- | --- |
+| `assignee` | Issue に Assign するアカウント。GitHub App の Bot は Assignee にできないため、マシンユーザーを使う |
+| `bot` | GitHub App の Bot 名 |
+| `workflow` | そのエージェントを動かすワークフローのファイル名 |
+| `appClientId` / `appPrivateKeyRef` | GitHub App の Client ID と、秘密鍵の 1Password の参照 |
+| `apiKeyRef` | エージェントの API キーの 1Password の参照 |
+| `roles.author` | 段階ごとの作成担当 |
+| `roles.implementers` | 実装計画で実装タスクに割り当ててよいエージェント |
+| `roles.reviewer` | レビュー担当 |
+
+- このファイルには秘密の値を書かない。秘密の値は、Secrets の `OP_SERVICE_ACCOUNT_TOKEN` だけにする
+- 運用中に調整したい値 (修正の上限など) は Variables に置く
+- 段階の Issue をワークフローがまとめて作るため、起動に Assign は必須ではない。それでも、誰が担当しているかを Issue で分かるようにするため、マシンユーザーを Assign する。Organization では、マシンユーザーをメンバーかコラボレーターとして追加する
+
+### 2.2 エージェントの呼び出し方
+
+イベントを受けて「どのエージェントに何をさせるか」を判定する部分と、エージェントを動かす部分を分ける。
+
+```mermaid
+flowchart LR
+  ev[イベント<br/>Assign / Close / 差し戻し / CI の失敗 / キューからの除外] --> router[振り分け用のワークフロー<br/>判定し、agents.json から担当を引く]
+  router -- workflow_dispatch --> agent[エージェントごとのワークフロー<br/>共通の入力と出力]
+  agent --> publish[共通の書き込みジョブ<br/>担当の App で push・PR 作成]
+```
+
+- **振り分け用のワークフロー**: 起動の判定、レビュー対象の判定、修正の回数の確認など、エージェントに依存しない処理を受け持つ
+- **エージェントごとのワークフロー**: 決まった形式の入力 (作成か修正か、対象の Issue や PR、指示の内容) を受け取り、決まった形式の出力 (変更の差分、コミットメッセージ、PR の説明) を返すことだけを受け持つ
+- **共通の書き込みジョブ**: 出力を受け取り、`agents.json` で引いた担当の GitHub App のトークンで、push と PR の作成を行う。PR の本文に `Closes #N` を入れるのもこのジョブで、どのエージェントでも確実に入るようにする
+
+エージェントを追加するときは、この形式に従ったワークフローを 1 つ書き、`agents.json` に登録する。
+
+`workflow_call` では呼び出すファイルを `uses:` に固定で書く必要があり、設定ファイルから選べない。そのため、エージェントのワークフローは `workflow_dispatch` で呼び出す。
+
+### 2.3 GitHub App
+
+- GitHub App はエージェントごとに用意し、`agents.json` に登録する
+  - PR の作成者は、自分の PR を Approve できない。作成担当とレビュー担当の App を分けることで、レビュー担当が Approve できるようにする
+  - そのため、`roles.reviewer` のエージェントは、`roles.author` と `roles.implementers` のどのエージェントとも別にする。`agents.json` の検証で確認する
+- エージェントには、読み取り専用のトークンだけを渡す。書き込みは、エージェントの出力を受け取った別のジョブが、GitHub App のトークンで行う
+- GITHUB_TOKEN で行った操作では次のワークフローが起動しないため、Issue の作成、Assign、push、PR の作成、レビュー、マージには GitHub App のトークンを使う
+
+## 3. 全体の流れ
+
+```mermaid
+flowchart TD
+  start[人が「新規機能」の Issue フォームで<br/>機能の親 Issue を作成] --> stages[ワークフローが段階の Issue をまとめて作成し、<br/>Blocked by でつないで担当を Assign]
+  stages --> req[人が要件定義書の PR を作成]
+  req --> review{Codex がレビュー}
+  review -- 差し戻し --> fix[PR の作成者が修正]
+  fix --> review
+  review -- Approve --> merge[Merge Queue でマージし、<br/>段階の Issue が Close される]
+  merge --> next{次の段階はあるか}
+  next -- 仕様書・概念モデル・アーキテクチャ設計 --> create[作成担当が成果物の PR を作成]
+  create --> review
+  next -- 実装計画 --> plan[作成担当が実装タスクの Issue を作成]
+  plan --> impl[依存先が解決したタスクから、<br/>作成担当が実装の PR を作成]
+  impl --> review
+  next -- すべて完了 --> done[機能の親 Issue を Close]
+```
+
+## 4. Issue の構成
+
+### 4.1 Issue の階層
+
+機能の親 Issue の直下に、各段階の Issue を横並びの Sub Issue として置く。段階の順序は Blocked by で表す。
+
+```
+機能の親 Issue                    (feature)
+├── 要件定義                      (stage:requirements)
+├── 仕様書                        (stage:specification)  Blocked by 要件定義
+├── 概念モデル                    (stage:domain-model)   Blocked by 仕様書
+├── アーキテクチャ設計            (stage:architecture)   Blocked by 概念モデル
+└── 実装計画                      (stage:planning)       Blocked by アーキテクチャ設計
+    └── 実装タスク                (stage:implementation)
+        └── 子タスク …
+```
+
+- GitHub の Sub Issue は 8 階層までのため、段階を入れ子にはしない
+- 実装タスクの階層の上限は、固定値にせず「8 から実装計画の Issue の深さを引いた値」として計算する
+
+### 4.2 段階と担当
+
+| 段階 | ラベル | 担当 (Assignee) | 担当に渡す資料 | 成果物 | レビュー |
+| --- | --- | --- | --- | --- | --- |
+| 要件定義 | `stage:requirements` | 機能の親 Issue の作成者 | 機能の親 Issue | `requirements.md` | あり |
+| 仕様書 | `stage:specification` | 作成担当 | 要件定義書 | `specification.md` | あり |
+| 概念モデル | `stage:domain-model` | 作成担当 | 仕様書 | `domain-model.md` | あり |
+| アーキテクチャ設計 | `stage:architecture` | 作成担当 | 要件定義書、仕様書、概念モデル | `architecture.md` | あり |
+| 実装計画 | `stage:planning` | 作成担当 | 仕様書、概念モデル、アーキテクチャ設計 | 実装タスクの Issue | なし |
+| 実装タスク | `stage:implementation` | 実装計画で決めた担当 | タスクの Issue、仕様書、概念モデル、アーキテクチャ設計 | ソースコード | あり |
+
+- 担当に渡す資料は、README の擬似コードの引数に対応する。修正のときも、作成のときと同じ資料と指摘内容を渡す
+
+- 実装計画にレビューが無いのは意図どおり (README の要件のとおり)
+- 段階の種類は、`stage:*` ラベルと「Issue の作成者が自分たちの GitHub App であること」の組み合わせで判定する。Issue の作成者は後から変えられないため、人が別の Issue に段階のラベルを付けても、段階の Issue としては扱わない
+
+### 4.3 機能の開始
+
+1. 人が「新規機能」の Issue フォーム (`.github/ISSUE_TEMPLATE/` に置く YAML) で、機能の親 Issue を作成する
+   - フォームでは、機能名 (英小文字とハイフン。例: `user-login`) と概要を入力する
+   - フォームから作った Issue には、`feature` ラベルが自動で付く
+2. `feature` ラベルの付いた Issue の作成をきっかけに、ワークフローが起動する
+   - 書き込み権限の無いユーザーが作った Issue では起動しない
+   - Issue の本文から機能名を取り出し、形式を確認する。フォームでは形式を確認できず、API や `gh` コマンドではフォームを通らずに Issue を作れるため、ワークフローでも確認する。形式が正しくなければ段階の Issue を作らず、親 Issue にコメントで知らせる
+3. ワークフローが、5 つの段階の Issue をまとめて作成する
+   - 機能の親 Issue の Sub Issue にし、Blocked by で順につなぐ
+   - 各段階の担当を Assign する
+
+段階の Issue を最初にまとめて作り、担当も Assign しておく。あとは「依存先がすべて Close されたら起動する」判定だけで、段階が順に進む。
+
+### 4.4 Issue の Close
+
+- 段階の Issue と実装タスクの Issue は、紐づく PR がマージされたときに `Closes #N` で Close される
+- 実装計画の Issue は、すべての実装タスクの Issue が Close されたら、ワークフローが Close する
+- 機能の親 Issue は、すべての段階の Issue が Close されたら、ワークフローが Close する。この状態を「機能の実装が完了した」とみなす
+
+GitHub は、Sub Issue がすべて Close されても親 Issue を自動では Close しないため、ワークフローで Close する。
+
+## 5. 成果物の配置
+
+ドキュメント形式の成果物は、ファイルとして PR で管理する。package by feature の考え方で、機能ごとにディレクトリを分ける。
+
+```
+docs/features/<機能の親 Issue の番号>-<機能名>/
+├── requirements.md     要件定義書
+├── specification.md    仕様書
+├── domain-model.md     概念モデル
+└── architecture.md     アーキテクチャ設計
+```
+
+ディレクトリ名に Issue の番号と機能名の両方を入れ、Issue との対応と内容の両方が分かるようにする。
+
+- 各段階の成果物は、上の 1 ファイルにまとめる
+- 図は、Mermaid などテキストで書ける形式で、文書の中に書く (Mermaid に限らない)
+- 画像、動画、音声などの非構造的なデータは置かない
+
+### 5.1 段階ごとに変更してよいファイル
+
+段階ごとに、変更してよいファイルと変更してはいけないファイルを `.github/coding-agent/stages.json` に glob で定義する。`agents.json` (誰が担当するか) とは関心ごとが違うため、ファイルを分ける。
+
+```json
+{
+  "stages": {
+    "requirements": { "allow": ["{featureDir}/requirements.md"] },
+    "specification": { "allow": ["{featureDir}/specification.md"] },
+    "domain-model": { "allow": ["{featureDir}/domain-model.md"] },
+    "architecture": { "allow": ["{featureDir}/architecture.md"] },
+    "implementation": {
+      "allow": ["**"],
+      "deny": [".github/**", "docs/features/**", "AGENTS.md", "CLAUDE.md", ".claude/**"]
+    }
+  }
+}
+```
+
+- `{featureDir}` は、機能の親 Issue の番号と機能名から決まるディレクトリ (`docs/features/<番号>-<機能名>`) に置き換える
+- 設計の段階では、その段階の成果物だけを変更できる
+- 実装タスクでは、変更するファイルを前もって決められないため、変更してはいけないファイルを決める
+
+| 実装タスクで変更してはいけないファイル | 理由 |
+| --- | --- |
+| `.github/**` | 自動化の仕組みや設定 (`agents.json` など) を、エージェントが書き換えられないようにするため |
+| `docs/features/**` | レビューを通った設計の成果物を、実装の段階で書き換えられないようにするため |
+| `AGENTS.md`、`CLAUDE.md`、`.claude/**` | 次に動くエージェントへの指示を、エージェント自身が書き換えられないようにするため |
+
+`.github/workflows/` は、GitHub App に Workflows の権限を与えなければ push できない。それでもレビューの前に機械的に判定し、理由が分かるメッセージで差し戻す。
+
+### 5.2 前の段階の成果物を直したいとき
+
+前の段階に戻る仕組みは設けない。例えば、アーキテクチャ設計の途中で仕様書の誤りに気づいた場合は、次のようにする。
+
+- エージェントは前の段階の成果物を変更できない (5.1)。気づいた点を PR の説明に書く
+- 前の段階の成果物は、人が別の Issue と PR で直す
+
+## 6. 段階の起動
+
+作成担当のエージェントは、次の条件をすべて満たしたときに起動する。
+
+- Issue が Open で、そのエージェントが Assignee に含まれている
+- すべての依存先 (Sub Issue と Blocked by の Issue) が Close されている
+- 依存先に紐づく PR に、Open のまま残っているものが無い
+
+判定は、Issue の Assign と Close のイベントで行う。同じ Issue では、エージェントを一度しか自動で起動しない (二重起動の防止)。
+
+## 7. 要件定義
+
+1. 人が要件定義書を書き、要件定義の Issue を Close する PR (`Closes #N`) を作成する
+   - 書いている途中は Draft の PR にしておき、書き終えたら Ready for review にする。Draft の PR はレビューしない
+2. Codex がレビューする。差し戻されたら人が修正し、push すると再びレビューされる
+3. Approve されたら、レビュー担当がマージする。要件定義の Issue が Close され、仕様書の段階が起動する
+
+要件定義書の PR は人が作るため、レビューの上限 (9.4) は適用しない。
+
+## 8. レビュー
+
+### 8.1 起動するきっかけ
+
+`pull_request` イベントの次のアクションで起動する。
+
+| アクション | 起動する理由 |
+| --- | --- |
+| `opened` / `reopened` | PR が作られた |
+| `ready_for_review` | Draft が解除された |
+| `synchronize` | 修正が push された |
+| `unlabeled` (`needs-human` が外されたときだけ) | 人が解決し、自動のループを再開する |
+
+- Draft の PR と、`needs-human` ラベルが付いている PR はレビューしない
+- 同じ PR のレビューは、PR ごとの `concurrency` (`cancel-in-progress: true`) で最新のコミットだけに絞る
+- フォークからの PR は対象外とする (Secrets を使えないため)
+- CI の結果は待たず、CI と並行してレビューする。CI が失敗するコードもレビューすることになるが、仕組みを単純に保つため。トークンの消費が問題になったら見直す
+
+### 8.2 レビュー対象の PR の判定
+
+次の順に確認し、1 つでも満たさなければ何もせずに終わる。
+
+1. PR の作成者が、書き込み権限を持つ人か、登録済みのエージェントの GitHub App である
+2. PR が Close する Issue (GraphQL の `closingIssuesReferences`) がちょうど 1 件である
+   - 0 件なら、通常の PR として何もしない
+   - 2 件以上なら、PR にコメントで知らせる
+3. その Issue の作成者が自分たちの GitHub App で、`stage:*` ラベルが付いている
+4. 変更されたファイルが、段階ごとに決めた範囲 (5.1) に収まっている
+   - 例: 要件定義の PR では `docs/features/<親 Issue の番号>-<機能名>/requirements.md` だけ
+   - 範囲外のファイルが変更されていたら、Codex を呼ばずに差し戻す。機械的に判定でき、API の料金もかからない
+
+段階の種類に応じて、Codex に渡すレビューの観点と参考資料 (前の段階までの成果物) を切り替える。
+
+### 8.3 Approve とマージ
+
+1. head の SHA を明示してチェックアウトし、Codex がレビューする
+   - `actions/checkout` は `pull_request` イベントでは既定で仮のマージコミットをチェックアウトするため、`ref` に head の SHA を指定する
+2. Codex の出力を受け取った別のジョブが、レビュー担当の GitHub App でレビューを投稿する
+3. Approve する場合は、直前に PR の head を取得し直し、レビューした SHA と同じか確認する。違えば Approve しない (新しい push で起動したレビューに任せる)
+4. レビューした SHA を `commit_id` に指定して Approve する
+5. `expectedHeadOid` を指定して、自動マージを有効にする (GraphQL の `enablePullRequestAutoMerge`)。必要な条件がそろうと、GitHub が PR を Merge Queue に入れる
+
+レビューしていないコミットがマージされるのを、次の仕組みで防ぐ。
+
+| 時間帯 | 防ぐ仕組み |
+| --- | --- |
+| レビューしている途中 | Approve の直前に head を確認し、変わっていれば Approve しない |
+| 自動マージを有効にするとき | `expectedHeadOid` により、head が変わっていれば GitHub が拒否する |
+| 自動マージを有効にした後 | ブランチ保護により、新しい push で承認が取り消され、承認が無いとマージできない |
+
+### 8.4 レビューの観点
+
+すべての段階に共通する観点は、次のとおり。
+
+- PR が Close する Issue の依頼内容を満たしているか
+- 前の段階までの成果物と矛盾していないか
+  - 漏れていないか (前の段階で決めたことが反映されているか)
+  - 余計なものが増えていないか (前の段階に無い要素が勝手に加わっていないか)
+- 曖昧な表現が無く、後の段階の担当者がこの文書だけを頼りに作業できるか
+- リポジトリの規約 (`AGENTS.md` の文章のルールなど) に従っているか
+
+段階ごとの観点と、レビュー担当に渡す参考資料は、次のとおり。
+
+| 段階 | 主な観点 | 参考資料 |
+| --- | --- | --- |
+| 要件定義 | 機能要件と非機能要件がそろっているか、各要件を確認できる形で書かれているか、範囲と範囲外が明確か、実現方法に踏み込みすぎていないか | 機能の親 Issue |
+| 仕様書 | すべての要件が仕様に反映されているか、異常系や境界値も含めて振る舞いが決まっているか | 要件定義書 |
+| 概念モデル | 仕様に出てくる概念と関係を表せているか、用語が仕様と一致しているか、DB のテーブルなど実装の都合が混ざっていないか | 仕様書 |
+| アーキテクチャ設計 | 非機能要件を満たせるか、概念モデルと対応しているか、既存の技術構成 (React と Javalin) と整合しているか、判断の理由が書かれているか | 要件定義書、仕様書、概念モデル |
+| 実装タスク | タスクの受け入れ条件を満たしているか、アーキテクチャ設計と概念モデルに沿っているか、テストが追加されているか、タスクの範囲を超えていないか | タスクの Issue、仕様書、概念モデル、アーキテクチャ設計 |
+
+- レビュー担当は、PR の差分だけでなく、リポジトリ全体を読み取り専用で参照できる
+- 段階ごとのレビューの指示は、`.github/coding-agent/prompts/review/<段階>.md` にファイルで置く。ワークフローを変えずに観点を調整でき、変更も PR で記録される。`.github/**` に置くため、実装タスクのエージェントは書き換えられない (5.1)
+
+### 8.5 差し戻す基準
+
+指摘は重要度で分け、修正しないと次の段階に進めない指摘があるときだけ差し戻す。
+
+| 重要度 | 内容 | 扱い |
+| --- | --- | --- |
+| must | 誤り、矛盾、漏れなど | 1 件でもあれば差し戻す |
+| should | 改善の提案 | コメントとして残し、Approve する |
+| nit | 細かな表現など | コメントとして残し、Approve する |
+
+細かな指摘でも差し戻すと、修正のたびに新しい指摘が出て、修正の上限 (9.4) にすぐ達してしまうため。
+
+### 8.6 レビュー担当の出力
+
+レビュー担当は、次の形式で出力する。形式は `.github/coding-agent/review-schema.json` に JSON Schema で定義し、出力時に強制する。
+
+```json
+{
+  "summary": "レビュー全体の所見 (Markdown)",
+  "findings": [
+    {
+      "severity": "must",
+      "path": "docs/features/12-user-login/specification.md",
+      "line": 42,
+      "body": "要件 R-3 のパスワードの再設定が、仕様に反映されていません。"
+    }
+  ]
+}
+```
+
+- `severity` は `must`、`should`、`nit` のどれか (8.5)
+- `path` と `line` は、ファイルや行に紐づかない指摘では `null` にする
+
+出力は、別のジョブが次のように GitHub に投稿する。
+
+- 合否はレビュー担当に出力させず、機械的に決める。`must` の指摘が 1 件でもあれば差し戻し (Request changes)、無ければ Approve する。合否を別に出力させると、「`must` の指摘があるのに Approve」のような食い違いが起こり得るため
+- `should` と `nit` の指摘も投稿する。Approve する場合も、指摘はコメントとして残す
+- `must` と `should` の指摘のうち、`path` と `line` が PR の差分に含まれるものは、行へのコメントとして投稿する。GitHub のレビューの API では、差分に含まれない行にはコメントを付けられないため、投稿する前にスクリプトで確認する
+- 差分の外にある指摘、行に紐づかない指摘、`nit` の指摘は、レビューの本文にまとめて載せる。`nit` を行へのコメントにしないのは、PR が読みにくくならないようにするため
+
+### 8.7 再レビュー
+
+修正後の再レビューでは、そのレビュー担当の GitHub App がこれまでに投稿したレビューを、レビュー担当に渡す。そのうえで、次のように指示する。
+
+- 前回の `must` の指摘が解消されたかを、まず確認する
+- 新しく `must` を出すのは、修正で新たに生じた問題か、前回見落としていた重大な問題に限る
+
+レビューのたびに基準が変わって新しい指摘が出続け、修正が終わらなくなるのを防ぐため。
+
+## 9. 修正
+
+### 9.1 修正を起動するきっかけ
+
+次のどれかが起きたら、PR を作ったエージェントに修正させる。
+
+| きっかけ | エージェントに渡すもの |
+| --- | --- |
+| レビュー担当の GitHub App が `changes_requested` のレビューを投稿した (`pull_request_review.submitted`) | そのレビューの本文と行へのコメントを、重要度ごとに整理したもの |
+| PR の CI が失敗した | 失敗したログ |
+| PR が Merge Queue から外された (`pull_request.dequeued`) | 外された理由 (コンフリクトなら `develop` を取り込んで解消させ、CI の失敗ならログを渡す) |
+
+- PR の作成者が登録済みのエージェントでなければ (人が作った PR なら)、何もしない。レビューの結果は GitHub が作成者に通知する
+- エージェントには、レビュー担当の GitHub App が投稿したレビューだけを渡す。第三者のコメントは渡さない (コメントでエージェントに指示を出せないようにするため)
+- `must` の指摘は必ず直すよう指示する。`should` と `nit` の指摘は、直すかどうかを修正担当の判断に任せる
+- 修正を始める前に、レビューした SHA と今の head が同じか確認する。違えば修正しない
+- 修正のジョブは、起動したきっかけに関係なく、その時点の head の SHA に対する理由 (レビュー担当の差し戻しと CI の失敗) をすべて集めて渡す。PR ごとの `concurrency` で 1 つずつ実行する
+  - 差し戻しと CI の失敗が同じコミットに対してほぼ同時に起こると、後から起動した修正は head が変わっているため止まる。理由をまとめて渡すことで、片方の理由が修正から漏れないようにする
+
+### 9.2 CI の失敗の検知
+
+- CI とみなすワークフローを `.github/coding-agent/ci.json` に名前で登録する。`workflow_run` は対象のワークフローを名前で指定する必要があるため
+- `workflow_run` の `completed` で、次のすべてを満たすものを検知する
+  - `conclusion` が `failure`
+  - 元のイベントが `pull_request`
+  - PR の作成者が、登録済みのエージェントの GitHub App
+- 同じ head の SHA の CI がすべて終わっているかを確認し、まだ動いているものがあれば何もせずに終わる。最後に終わった CI の `workflow_run` が修正を起動し、失敗したすべての CI のログをまとめて渡す
+- 不安定なテストに備えて、失敗した CI は一度だけ自動で再実行する (失敗したジョブだけ)。再実行しても失敗したら、修正を起動する。再実行は修正の回数 (9.4) に数えない
+
+ほかの方法を採らない理由は、次のとおり。
+
+- `check_suite` イベントは、GitHub Actions が作ったチェックスイートではワークフローを起動しない
+- CI のワークフローに失敗を知らせるジョブを足す方法は、CI を書くたびに自動化の仕組みの都合を持ち込むことになる
+
+### 9.3 修正の流れ
+
+1. 対象の SHA をチェックアウトし、エージェントが読み取り専用のトークンで修正する
+2. 別のジョブが、そのエージェントの GitHub App のトークンで、同じブランチに push する。新しい PR は作らない
+3. push により `synchronize` が発生し、Codex が再びレビューする
+
+### 9.4 修正の上限
+
+エージェントどうしのループが終わらないのを防ぐため、エージェントが修正する回数に上限を設ける。
+
+- 上限は「エージェントが修正する回数」とし、Variables の `REVIEW_MAX_FIX_ROUNDS` (既定は 3) で変えられるようにする
+  - 3 なら、エージェントが 3 回まで修正し、4 回目に修正が必要になった時点で人に引き継ぐ
+- 修正のきっかけ (差し戻し、CI の失敗、Merge Queue からの除外) に関係なく、同じ上限で数える
+- 上限は、エージェントが作った PR だけに適用する
+- 回数は PR のタイムラインから数え、別の場所には保存しない
+  - 修正用のジョブは、修正を push するたびに、そのエージェントの GitHub App で PR に印となるコメントを残す
+  - 作成者が登録済みのエージェントの GitHub App で、印を含むコメントだけを数える。他の人が同じ文字列のコメントを書いても数えない
+
+上限を超えたら、次のように人に引き継ぐ。
+
+1. 自動のループを止め、PR に `needs-human` ラベルを付ける
+2. 機能の親 Issue の作成者を Assign し、理由をコメントする
+3. 人が修正を push するなどして対応する
+4. 人が `needs-human` ラベルを外したら「解決した」とみなし、Codex が再びレビューする
+5. 修正の回数は、最後に `needs-human` が外された時点から数え直す
+
+ラベルを外すことを再開の合図にすることで、人の作業の途中の push でループが動き出さないようにする。
+
+## 10. 実装計画と実装
+
+### 10.1 実装計画
+
+1. 実装計画の段階が起動すると、作成担当が概念モデルとアーキテクチャ設計を読み、実装タスクに分割した計画を出力する
+2. 別のジョブが計画を機械的に検証する。問題があれば Issue を 1 件も作らず、実装計画の Issue にコメントで知らせる
+3. GitHub App のトークンで、次の順に書き込む
+   1. 実装タスクの Issue を作成し、実装計画の Issue (または親タスク) の Sub Issue にする
+   2. Blocked by の関係を設定する
+   3. 担当を Assign する (Assign を最後にし、依存関係を設定する前にエージェントが起動しないようにする)
+
+実装計画は、README の要件のとおり Codex のレビューを行わない。
+
+### 10.2 実装
+
+- 依存先が解決したタスクから、並行して進める
+- 各タスクの `実施` は、レビュー担当が PR をマージし、Issue が Close されるまでを指す
+- 実装の PR にも、8 章のレビューと 9 章の修正の流れを適用する
+
+## 11. ブランチ保護
+
+### 11.1 `develop`
+
+ルールセットで次を有効にする。
+
+- PR を必須にする
+- 承認を必須にする
+- 新しいコミットが push されたら、それまでの承認を取り消す (Dismiss stale pull request approvals)
+- 必須のステータスチェック
+- Merge Queue を必須にする
+
+あわせて、次のようにする。
+
+- CI のワークフローを `merge_group` イベントでも起動する。Merge Queue は、他の PR とあわせた状態でテストする
+- Codex のレビューは `merge_group` では起動しない
+- 「マージ前にブランチを最新にする」の設定は使わない (Merge Queue が同じ役割を果たすため)
+
+### 11.2 `main`
+
+人だけがマージできるように保護する。`main` へのマージは、人が `develop` から PR を作って行う。
+
+## 12. セキュリティ
+
+- エージェントには書き込み権限を持つトークンを渡さない。書き込みは、エージェントの出力を受け取った別のジョブが行う
+- 書き込み権限の無いユーザーの操作では、エージェントを起動しない
+- フォークからの PR は対象外とする
+- エージェントに渡すレビューは、レビュー担当の GitHub App が投稿したものだけにする
+- 段階の Issue かどうかは、ラベルだけでなく Issue の作成者でも判定する
+- 段階ごとに変更してよいファイルを決め、範囲外の変更はレビューの前に機械的に差し戻す
+- Issue の本文はエージェントのプロンプトに含まれる。プロンプトでは、依頼と無関係な指示 (秘密情報の出力など) に従わないよう指示する
+
+## 13. 設定
+
+| 名前 | 種類 | 内容 | 既定値 |
+| --- | --- | --- | --- |
+| `REVIEW_MAX_FIX_ROUNDS` | Variables | エージェントが修正する回数の上限 | 3 |
+| `PLANNER_MAX_TASKS` | Variables | 1 回の実装計画で作成できる実装タスクの上限 | 30 |
+
+設定ファイルは次のとおり。秘密の値は Secrets の `OP_SERVICE_ACCOUNT_TOKEN` だけに置く。
+
+| ファイル | 内容 |
+| --- | --- |
+| `.github/coding-agent/agents.json` | エージェントの登録と、段階ごとの担当 (2.1) |
+| `.github/coding-agent/stages.json` | 段階ごとに変更してよいファイル (5.1) |
+| `.github/coding-agent/ci.json` | CI とみなすワークフロー (9.2) |
+| `.github/coding-agent/review-schema.json` | レビュー担当の出力の形式 (8.6) |
+| `.github/coding-agent/prompts/review/<段階>.md` | 段階ごとのレビューの指示 (8.4) |
+
+## 14. 既存の実装からの移行
+
+既存のワークフローとスクリプトは、次のように扱う。
+
+| 既存のファイル | 扱い | 内容 |
+| --- | --- | --- |
+| `coding-agent-gate.yml`、`resolve-target.mjs`、`claim-issue.mjs`、`dispatch-issues.mjs` | 振り分け用のワークフローに作り直す | 依存先の判定、二重起動の防止、`workflow_dispatch` での呼び出し直しは、そのまま使う。担当の判定を `agents.json` から引くように変える |
+| `coding-agent-planner.yml`、`apply-plan.mjs`、`plan-validation.mjs`、`plan-schema.json` | 実装計画の段階として使い続ける | 計画を作る起点を、設計 Issue から実装計画の Issue に変える。`agent` 項目は `roles.implementers` から選ぶ。`stage:implementation` ラベルを付ける。階層の上限を計算で決める (4.1) |
+| `coding-agent-claude-code.yml` | Claude 用のワークフローに作り直す | 共通の入力と出力 (2.2) に合わせる |
+| `coding-agent-codex.yml` | レビュー用のワークフローに作り直す | 実装担当からレビュー担当に役割を変える |
+| `coding-agent-publish.yml` | 共通の書き込みジョブに広げる | 担当の GitHub App を `agents.json` から引く。修正のときは、新しい PR を作らず同じブランチに push する |
+| `result-schema.json` | 使い続ける | 作成担当の出力の形式 |
+| `coding-agent-jules.yml` | 削除する | |
+| `.github/coding-agent/README.md` | 書き直す | 新しい仕組みのセットアップ手順にする |
+
+Variables は、次のように整理する。
+
+- `*_ASSIGNEE`、`OP_*_REF`、`CODING_AGENT_APP_*` は `agents.json` に移す
+- `PLANNER_MODEL` は、エージェントごとの設定として `agents.json` に移す
+- `PLANNER_MAX_TASKS` は、運用中に調整したい値のため Variables に残す
+
+作る順番は、次のとおり。各段階で動作を確認しながら進める。
+
+1. 土台: `agents.json`、`stages.json`、`ci.json` とそれぞれの Schema、振り分け用のワークフローの骨組み、共通の書き込みジョブ
+2. 機能の開始: Issue フォーム、段階の Issue の作成、Issue の Close
+3. 作成: Claude 用のワークフロー (文書の段階の作成)
+4. レビュー: レビュー対象の判定、Codex のレビュー、Approve と Merge Queue へのマージ
+5. 修正のループ: 差し戻し、CI の失敗、Merge Queue からの除外、修正の上限、`needs-human`
+6. 実装計画と実装: planner の移行、実装タスク
+7. 後片付け: Jules 用のワークフローの削除、セットアップ手順の書き直し
