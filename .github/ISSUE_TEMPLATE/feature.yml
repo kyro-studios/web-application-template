@@ -1,0 +1,24 @@
+name: 新規機能
+description: 新しい機能の開発を始める。作成すると、要件定義から実装計画までの段階の Issue が自動で作られる
+labels: [feature]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        この Issue を作成すると、要件定義・仕様書・概念モデル・アーキテクチャ設計・実装計画の段階の Issue が、この Issue の Sub Issue として自動で作られます。
+        最初の段階 (要件定義) は、この Issue の作成者に Assign されます。
+  - type: input
+    id: feature-name
+    attributes:
+      label: 機能名
+      description: 成果物を置くディレクトリの名前に使う識別子です。英小文字・数字とハイフンで、50 文字以内にしてください
+      placeholder: user-login
+    validations:
+      required: true
+  - type: textarea
+    id: overview
+    attributes:
+      label: 概要
+      description: 開発したい機能の目的や背景を書いてください。要件定義書を書くときの出発点になります
+    validations:
+      required: true
