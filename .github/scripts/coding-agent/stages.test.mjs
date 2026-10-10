@@ -1,0 +1,64 @@
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { loadConfig } from './config.mjs';
+import { LABELS } from './setup-repository.mjs';
+import { FEATURE_LABEL, FEATURE_STAGES, IMPLEMENTATION_STAGE, getFeatureStage, stageIssueBody, stageLabel, stageOf } from './stages.mjs';
+
+const ROOT_DIR = fileURLToPath(new URL('../../../', import.meta.url));
+
+describe('段階の定義', () => {
+  it('設定ファイルやセットアップのラベルと、段階がそろっている', async () => {
+    const config = await loadConfig(ROOT_DIR);
+    const authored = FEATURE_STAGES.filter((stage) => stage.id !== 'requirements').map((stage) => stage.id);
+    assert.deepEqual(Object.keys(config.agents.roles.author).sort(), [...authored].sort());
+
+    const reviewed = FEATURE_STAGES.filter((stage) => stage.artifact !== null).map((stage) => stage.id);
+    assert.deepEqual(Object.keys(config.stages.stages).sort(), [...reviewed, IMPLEMENTATION_STAGE].sort());
+
+    const labels = LABELS.map((label) => label.name);
+    for (const stage of [...FEATURE_STAGES.map((definition) => definition.id), IMPLEMENTATION_STAGE]) {
+      assert.ok(labels.includes(stageLabel(stage)), stage);
+    }
+    assert.ok(labels.includes(FEATURE_LABEL));
+  });
+
+  it('担当に渡す資料は、前の段階の成果物だけにする', () => {
+    for (const [index, stage] of FEATURE_STAGES.entries()) {
+      const previous = FEATURE_STAGES.slice(0, index);
+      for (const input of stage.inputs) {
+        assert.ok(previous.some((candidate) => candidate.id === input && candidate.artifact !== null), `${stage.id} の ${input}`);
+      }
+    }
+  });
+});
+
+describe('stageOf', () => {
+  it('段階のラベルがちょうど 1 つなら、段階を返す', () => {
+    assert.equal(stageOf([{ name: 'bug' }, { name: 'stage:planning' }]), 'planning');
+    assert.equal(stageOf(['stage:requirements']), 'requirements');
+    assert.equal(stageOf([{ name: 'feature' }]), undefined);
+    assert.equal(stageOf(['stage:requirements', 'stage:planning']), undefined);
+  });
+});
+
+describe('stageIssueBody', () => {
+  it('作業内容、成果物、参考資料を書く', () => {
+    const body = stageIssueBody({ stage: getFeatureStage('architecture'), featureIssueNumber: 12, featureDir: 'docs/features/12-login' });
+    assert.match(body, /^#12 の「アーキテクチャ設計」の段階です。/);
+    assert.match(body, /## 成果物\n\n`docs\/features\/12-login\/architecture\.md`/);
+    assert.match(body, /- 概念モデル: `docs\/features\/12-login\/domain-model\.md`/);
+    assert.doesNotMatch(body, /## 進め方/);
+  });
+
+  it('要件定義には、人が PR を作る進め方を書く', () => {
+    const body = stageIssueBody({ stage: getFeatureStage('requirements'), featureIssueNumber: 12, featureDir: 'docs/features/12-login' });
+    assert.match(body, /## 進め方/);
+    assert.doesNotMatch(body, /## 参考資料/);
+  });
+
+  it('実装計画には、成果物のファイルを書かない', () => {
+    const body = stageIssueBody({ stage: getFeatureStage('planning'), featureIssueNumber: 12, featureDir: 'docs/features/12-login' });
+    assert.doesNotMatch(body, /## 成果物/);
+  });
+});
