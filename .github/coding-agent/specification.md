@@ -293,11 +293,46 @@ docs/features/<機能の親 Issue の番号>-<機能名>/
 
 作成担当のエージェントは、次の条件をすべて満たしたときに起動する。
 
-- Issue が Open で、そのエージェントが Assignee に含まれている
+- 進行役の App が作った、Open の段階の Issue で、その段階の作成担当 (`roles.author`) が Assignee に含まれている
 - すべての依存先 (Sub Issue と Blocked by の Issue) が Close されている
-- 依存先に紐づく PR に、Open のまま残っているものが無い
+- 依存先に紐づく PR に、Open のまま残っているものが無い (マージされずに Close された PR は、破棄されたものとして扱う)
 
-判定は、Issue の Assign と Close のイベントで行う。同じ Issue では、エージェントを一度しか自動で起動しない (二重起動の防止)。
+判定は、次のイベントで行う。
+
+| イベント | 判定する Issue |
+| --- | --- |
+| Issue の Close | Close された Issue を待っていた Issue (親 Issue と、Blocking していた Issue)。起動できるものごとに、振り分け用のワークフローを Issue の番号を指定して手動実行し直し、その実行で改めて判定する |
+| Issue の Assign | Assign された Issue。Assign されたのが作成担当のエージェントのときだけ判定する |
+| 振り分け用のワークフローの手動実行 | 指定した Issue。人が段階を起動し直すときにも使う |
+
+- 1 回の Close で複数の Issue が起動できるようになることがあるため、Issue ごとに手動実行し直す。振り分け用のワークフローは Issue ごとの `concurrency` で 1 つずつ処理されるので、同じ Issue を同時に起動しない
+- 書き込み権限の無いユーザーの操作 (自分の Issue を Close したなど) では起動しない。進行役とエージェントの App (マージによる Close など) と、手動実行し直す GitHub Actions は信頼する
+- 起動したら、進行役の App が Issue に印となるコメントを残す。同じ Issue では、エージェントを一度しか自動で起動しない (二重起動の防止)。起動し直したいときは、振り分け用のワークフローを、Issue の番号を指定し `force` を有効にして手動実行する
+- 起動したイベントが過ぎてしまった Issue (仕組みを入れる前に前の段階が完了した場合など) も、手動実行で起動できる
+- 今は、文書の段階 (仕様書、概念モデル、アーキテクチャ設計) だけを起動する。実装計画と実装タスクは、作る順番の「7. 実装計画と実装」で対応する
+
+起動すると、作成担当に次の資料を渡す (2.2 の依頼の Artifact に含める)。
+
+- 段階の Issue と、機能の親 Issue の本文
+- 作成する成果物のパス、参考資料 (前の段階の成果物のパス)、変更してよいファイル (5.1)
+- 作業を始めるコミット (既定ブランチの最新のコミット)
+
+### 6.1 作成担当のワークフロー
+
+- 作成担当のワークフローは、作業を始めるコミットをチェックアウトし、そこでエージェントにファイルを編集させる
+- 作成の指示 (`.github/coding-agent/prompts/create/`) やスクリプトは、既定ブランチのものを使い、作業ディレクトリの外に置く (変更内容に含めないため)
+- 文書の段階では、エージェントにはファイルの読み書きだけを許可し、コマンドは実行させない
+- エージェントは、変更のほかに、コミットメッセージと PR の説明 (`result-schema.json` の形式) を出力する
+- 作業を始めたコミットとの差分をまとめ、共通の書き込みジョブ (`coding-agent-publish.yml`) に渡す
+
+### 6.2 共通の書き込みジョブ
+
+- エージェントのワークフローから、エージェントの App の秘密鍵を Secrets として受け取り、その App のトークンで書き込む
+- 作成のときは、`coding-agent/<エージェント>/issue-<番号>-<実行の ID>` のブランチに差分をコミットして push し、既定ブランチに向けた PR を作成する
+  - PR のタイトルは、コミットメッセージの 1 行目にする
+  - PR の本文には、エージェントが出力した説明に加えて、`Closes #<段階の Issue の番号>` を必ず入れる (エージェントに任せず、確実に入れる)
+- エージェントが変更を作らなかった場合は、Issue にコメントで知らせ、ワークフローを失敗させる
+- 修正のとき (同じブランチへの push) は、作る順番の「6. 修正のループ」で対応する
 
 ## 7. 要件定義
 
@@ -619,9 +654,9 @@ node .github/scripts/coding-agent/setup-repository.mjs --repo <owner>/<name> [--
 | --- | --- | --- |
 | `coding-agent-gate.yml`、`resolve-target.mjs`、`claim-issue.mjs`、`dispatch-issues.mjs` | 振り分け用のワークフローに作り直す | 依存先の判定、二重起動の防止、`workflow_dispatch` での呼び出し直しは、そのまま使う。担当の判定を `agents.json` から引くように変える |
 | `coding-agent-planner.yml`、`apply-plan.mjs`、`plan-validation.mjs`、`plan-schema.json` | 実装計画の段階として使い続ける | 計画を作る起点を、設計 Issue から実装計画の Issue に変える。`agent` 項目は `roles.implementers` から選ぶ。`stage:implementation` ラベルを付ける。階層の上限を計算で決める (4.1) |
-| `coding-agent-claude-code.yml` | Claude 用のワークフローに作り直す | 共通の入力と出力 (2.2) に合わせる |
+| `coding-agent-claude-code.yml` | Claude 用のワークフロー (`coding-agent-claude.yml`) に作り直す | 共通の入力と出力 (2.2) に合わせる。作り直したら削除する |
 | `coding-agent-codex.yml` | レビュー用のワークフローに作り直す | 実装担当からレビュー担当に役割を変える |
-| `coding-agent-publish.yml` | 共通の書き込みジョブに広げる | 担当の GitHub App を `agents.json` から引く。修正のときは、新しい PR を作らず同じブランチに push する |
+| `coding-agent-publish.yml` | 共通の書き込みジョブに作り直す (6.2) | 担当の GitHub App の Client ID を `agents.json` から引き、秘密鍵はエージェントのワークフローから受け取る。修正のときは、新しい PR を作らず同じブランチに push する |
 | `result-schema.json` | 使い続ける | 作成担当の出力の形式 |
 | `coding-agent-jules.yml` | 削除する | |
 | `.github/coding-agent/README.md` | 書き直す | 新しい仕組みのセットアップ手順にする |

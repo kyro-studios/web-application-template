@@ -16,6 +16,7 @@
  * @property {{ login: string }[]} assignees
  * @property {number | undefined} parent 親 Issue の番号
  * @property {number[]} blockedBy この Issue を Blocking している Issue の番号
+ * @property {{ number: number, state: 'OPEN' | 'CLOSED' | 'MERGED' }[]} closingPulls この Issue を Close する (した) PR
  */
 
 /**
@@ -34,8 +35,10 @@
 export function createFakeGitHub({ actor, permissions = {} }) {
   /** @type {Map<number, FakeIssue>} */
   const issues = new Map();
-  /** @type {{ issue_number: number, body: string }[]} */
+  /** @type {{ issue_number: number, body: string, user: { login: string } }[]} */
   const comments = [];
+  /** @type {Record<string, string>} */
+  const branches = {};
   /** @type {Map<number, FakePullRequest>} */
   const pulls = new Map();
   let nextNumber = 1;
@@ -69,7 +72,7 @@ export function createFakeGitHub({ actor, permissions = {} }) {
   };
 
   /**
-   * @param {{ title?: string, body?: string, labels?: string[], user?: string, state?: 'open' | 'closed', parent?: number }} fields
+   * @param {{ title?: string, body?: string, labels?: string[], user?: string, state?: 'open' | 'closed', parent?: number, assignees?: string[] }} fields
    * @returns {FakeIssue}
    */
   const addIssue = (fields) => {
@@ -84,9 +87,10 @@ export function createFakeGitHub({ actor, permissions = {} }) {
       state_reason: null,
       user: { login: fields.user ?? actor },
       labels: (fields.labels ?? []).map((name) => ({ name })),
-      assignees: [],
+      assignees: (fields.assignees ?? []).map((login) => ({ login })),
       parent: fields.parent,
       blockedBy: [],
+      closingPulls: [],
     };
     issues.set(number, issue);
     return issue;
@@ -114,6 +118,14 @@ export function createFakeGitHub({ actor, permissions = {} }) {
     rest: {
       pulls: pullsApi,
       repos: {
+        /** @param {{ branch: string }} params */
+        getBranch: async ({ branch }) => {
+          const sha = branches[branch];
+          if (sha === undefined) {
+            throw Object.assign(new Error(`ブランチ ${branch} がありません`), { status: 404 });
+          }
+          return { data: { name: branch, commit: { sha } } };
+        },
         /** @param {{ username: string }} params */
         getCollaboratorPermissionLevel: async ({ username }) => {
           const permission = permissions[username];
@@ -141,9 +153,13 @@ export function createFakeGitHub({ actor, permissions = {} }) {
         },
         /** @param {{ issue_number: number, body: string }} params */
         createComment: async ({ issue_number, body }) => {
-          comments.push({ issue_number, body });
+          comments.push({ issue_number, body, user: { login: actor } });
           return { data: {} };
         },
+        /** @param {{ issue_number: number }} params */
+        listComments: async ({ issue_number }) => ({
+          data: structuredClone(comments.filter((comment) => comment.issue_number === issue_number)),
+        }),
         /** @param {{ issue_number: number, state: 'open' | 'closed', state_reason: string }} params */
         update: async ({ issue_number, state, state_reason }) => {
           const issue = getIssue(issue_number);
@@ -159,6 +175,9 @@ export function createFakeGitHub({ actor, permissions = {} }) {
      * @param {{ issue_number: number }} params
      */
     paginate: async (route, params) => {
+      if (route === github.rest.issues.listComments) {
+        return (await github.rest.issues.listComments(/** @type {any} */ (params))).data;
+      }
       for (const [name, method] of Object.entries(pullsApi)) {
         if (route === method) {
           return (await pullsApi[/** @type {keyof typeof pullsApi} */ (name)](/** @type {any} */ (params))).data;
@@ -205,6 +224,26 @@ export function createFakeGitHub({ actor, permissions = {} }) {
         return { repository: { pullRequest: pull && { closingIssuesReferences: { nodes: pull.closing.map((number) => ({ number })) } } } };
       }
       const issue = issues.get(variables.number) ?? null;
+      if (query.includes('fragment Dependency')) {
+        /** @param {number[]} numbers */
+        const connection = (numbers) => ({
+          totalCount: numbers.length,
+          nodes: numbers.map((number) => {
+            const dependency = getIssue(number);
+            return {
+              number,
+              state: dependency.state === 'open' ? 'OPEN' : 'CLOSED',
+              closedByPullRequestsReferences: { nodes: dependency.closingPulls },
+            };
+          }),
+        });
+        const subIssues = [...issues.values()].filter((candidate) => candidate.parent === variables.number).map((candidate) => candidate.number);
+        return { repository: { issue: issue && { subIssues: connection(subIssues), blockedBy: connection(issue.blockedBy) } } };
+      }
+      if (query.includes('blocking(first')) {
+        const blocking = [...issues.values()].filter((candidate) => candidate.blockedBy.includes(variables.number)).map((number) => ({ number: number.number }));
+        return { repository: { issue: issue && { parent: issue.parent === undefined ? null : { number: issue.parent }, blocking: { nodes: blocking } } } };
+      }
       if (query.includes('blockedBy(first')) {
         return { repository: { issue: issue && { blockedBy: { nodes: issue.blockedBy.map((number) => ({ number })) } } } };
       }
@@ -215,7 +254,7 @@ export function createFakeGitHub({ actor, permissions = {} }) {
     },
   };
 
-  return { github, issues, comments, pulls, addIssue, addPull };
+  return { github, issues, comments, pulls, branches, addIssue, addPull };
 }
 
 /**

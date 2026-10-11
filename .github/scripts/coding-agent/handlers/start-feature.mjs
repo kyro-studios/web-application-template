@@ -35,7 +35,7 @@ export const startFeature = {
     // 書き込み権限の無いユーザーが作った Issue では、段階の Issue を作らない
     if (!(await hasWritePermission(github, repository, author))) {
       core.notice(`#${feature.number} の作成者 ${author} は書き込み権限を持たないため、段階の Issue を作成しません`);
-      return [];
+      return {};
     }
 
     const existing = (await listSubIssues(github, repository, feature.number)).filter((issue) =>
@@ -45,7 +45,7 @@ export const startFeature = {
     // 段階の Issue を作り始めた後の編集では、機能名 (成果物のディレクトリ) を変えない
     if (context.payload.action === 'edited' && isStarted) {
       core.info(`#${feature.number} の段階の Issue は作成済みのため、編集では何もしません`);
-      return [];
+      return {};
     }
 
     const featureName = parseIssueForm(feature.body).get(FEATURE_NAME_FIELD) ?? '';
@@ -62,7 +62,7 @@ export const startFeature = {
         });
       }
       core.notice(`#${feature.number} の機能名の形式が正しくないため、段階の Issue を作成しません`);
-      return [];
+      return {};
     }
     const featureDir = featureDirectory(config.stages, feature.number, featureName);
 
@@ -123,6 +123,6 @@ export const startFeature = {
         ].join('\n'),
       });
     }
-    return [];
+    return {};
   },
 };

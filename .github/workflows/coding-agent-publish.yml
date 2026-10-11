@@ -1,25 +1,24 @@
 name: Coding Agent Publish
 
+# エージェントのワークフローから呼び出す、共通の書き込みジョブ。
+# エージェントが作った変更を、そのエージェントの GitHub App のトークンで push し、PR を作成する。
+# エージェントには書き込み権限を持つトークンを渡さず、このジョブだけが書き込む (仕様の 2.3)。
 on:
   workflow_call:
     inputs:
-      agent-id:
-        description: エージェントの識別子 (ブランチ名に使う)
+      agent:
+        description: エージェントの識別子 (agents.json のキー)
         type: string
         required: true
-      agent-name:
-        description: エージェントの表示名
+      mode:
+        description: 依頼の種類 (今は create だけに対応する)
         type: string
         required: true
       issue-number:
-        description: 対象の Issue 番号
+        description: 対象の Issue の番号
         type: string
         required: true
-      base-branch:
-        description: PR のマージ先ブランチ
-        type: string
-        required: true
-      base-sha:
+      target-sha:
         description: エージェントが作業を始めたコミット
         type: string
         required: true
@@ -28,8 +27,8 @@ on:
         type: string
         required: true
     secrets:
-      OP_SERVICE_ACCOUNT_TOKEN:
-        description: 1Password のサービスアカウントトークン
+      app-private-key:
+        description: エージェントの GitHub App の秘密鍵
         required: true
 
 permissions: {}
@@ -38,40 +37,53 @@ jobs:
   publish:
     name: PR の作成
     runs-on: ubuntu-latest
-    permissions: {}
+    timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
-      - name: GitHub App の設定を確認する
+      - name: 依頼の種類を確かめる
+        if: inputs.mode != 'create'
         env:
-          APP_CLIENT_ID: ${{ vars.CODING_AGENT_APP_CLIENT_ID }}
-          PRIVATE_KEY_REF: ${{ vars.OP_CODING_AGENT_APP_PRIVATE_KEY_REF }}
+          MODE: ${{ inputs.mode }}
         run: |
-          if [ -z "$APP_CLIENT_ID" ] || [ -z "$PRIVATE_KEY_REF" ]; then
-            echo "::error::リポジトリ変数 CODING_AGENT_APP_CLIENT_ID と OP_CODING_AGENT_APP_PRIVATE_KEY_REF を設定してください"
+          echo "::error::依頼の種類 $MODE には、まだ対応していません"
+          exit 1
+
+      - name: 既定ブランチの設定をチェックアウトする
+        uses: actions/checkout@v7
+        with:
+          path: trusted
+          sparse-checkout: .github
+          persist-credentials: false
+
+      - name: エージェントの設定を読み込む
+        id: config
+        env:
+          AGENT: ${{ inputs.agent }}
+        run: |
+          set -euo pipefail
+          agents=trusted/.github/coding-agent/agents.json
+          if [ "$(jq --arg agent "$AGENT" '.agents | has($agent)' "$agents")" != 'true' ]; then
+            echo "::error::エージェント $AGENT は agents.json に登録されていません"
             exit 1
           fi
+          echo "client-id=$(jq -r --arg agent "$AGENT" '.agents[$agent].appClientId' "$agents")" >> "$GITHUB_OUTPUT"
+          echo "name=$(jq -r --arg agent "$AGENT" '.agents[$agent].name' "$agents")" >> "$GITHUB_OUTPUT"
 
-      - name: 1Password から秘密鍵を読み込む
-        id: op
-        uses: 1password/load-secrets-action@v5
-        with:
-          export-env: false
-        env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          APP_PRIVATE_KEY: ${{ vars.OP_CODING_AGENT_APP_PRIVATE_KEY_REF }}
-
-      - name: GitHub App のトークンを発行する
+      - name: エージェントの App のトークンを発行する
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
-          client-id: ${{ vars.CODING_AGENT_APP_CLIENT_ID }}
-          private-key: ${{ steps.op.outputs.APP_PRIVATE_KEY }}
+          client-id: ${{ steps.config.outputs.client-id }}
+          private-key: ${{ secrets.app-private-key }}
           permission-contents: write
           permission-issues: write
           permission-pull-requests: write
 
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.base-sha }}
+          path: work
+          ref: ${{ inputs.target-sha }}
           token: ${{ steps.app-token.outputs.token }}
 
       - name: エージェントの作業結果を取得する
@@ -81,13 +93,14 @@ jobs:
           path: ${{ runner.temp }}/coding-agent-result
 
       - name: コミットして PR を作成する
+        working-directory: work
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
-          AGENT_ID: ${{ inputs.agent-id }}
-          AGENT_NAME: ${{ inputs.agent-name }}
+          AGENT: ${{ inputs.agent }}
+          AGENT_NAME: ${{ steps.config.outputs.name }}
           ISSUE_NUMBER: ${{ inputs.issue-number }}
-          BASE_BRANCH: ${{ inputs.base-branch }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
           RESULT_DIR: ${{ runner.temp }}/coding-agent-result
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -98,7 +111,8 @@ jobs:
 
           if [ ! -s "$patch" ]; then
             gh issue comment "$ISSUE_NUMBER" --body "🤖 ${AGENT_NAME} は変更を作成しませんでした。詳細は [ワークフロー]($RUN_URL) のログを確認してください。"
-            exit 0
+            echo "::error::エージェントが変更を作成しませんでした"
+            exit 1
           fi
 
           # エージェントの出力が壊れていても PR を作成できるよう、既定値を用意しておく
@@ -106,7 +120,7 @@ jobs:
           pull_request_body="$(jq -r '.pull_request_body // empty' "$result" 2>/dev/null || true)"
           if [ -z "$commit_message" ]; then
             echo "::warning::エージェントがコミットメッセージを出力しなかったため、既定値を使います"
-            commit_message="feat: resolve #${ISSUE_NUMBER}"
+            commit_message="chore: resolve #${ISSUE_NUMBER}"
           fi
           title="$(printf '%s\n' "$commit_message" | head -n 1)"
 
@@ -115,7 +129,7 @@ jobs:
           git config user.name "$bot_login"
           git config user.email "${bot_id}+${bot_login}@users.noreply.github.com"
 
-          branch="coding-agent/${AGENT_ID}/issue-${ISSUE_NUMBER}-${GITHUB_RUN_ID}"
+          branch="coding-agent/${AGENT}/issue-${ISSUE_NUMBER}-${GITHUB_RUN_ID}"
           git switch --create "$branch"
           git apply --index --binary "$patch"
           git commit --file - <<< "$commit_message"

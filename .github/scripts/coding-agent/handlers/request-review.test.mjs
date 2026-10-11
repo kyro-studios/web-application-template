@@ -70,8 +70,8 @@ function createContext(action, pullRequest, extra = {}) {
 async function run(fake, context) {
   const core = createFakeCore();
   // @ts-expect-error テストに必要な部分だけを渡す
-  const requests = await requestReview.run({ github: fake.github, context, core, config });
-  return { requests, core };
+  const result = await requestReview.run({ github: fake.github, context, core, config });
+  return { requests: result.requests ?? [], core };
 }
 
 /**

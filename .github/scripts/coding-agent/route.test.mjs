@@ -81,8 +81,8 @@ describe('match', () => {
 
   it('処理するハンドラーがあれば、進行役の GitHub App の Client ID を出力する', async () => {
     const { match } = createRouter([
-      { name: 'skip', events: ['issues.closed'], matches: async () => false, run: async () => [] },
-      { name: 'handle', events: ['issues.closed'], run: async () => [] },
+      { name: 'skip', events: ['issues.closed'], matches: async () => false, run: async () => ({}) },
+      { name: 'handle', events: ['issues.closed'], run: async () => ({}) },
     ]);
 
     const core = await runStep(match, createContext('issues', 'closed'));
@@ -93,7 +93,7 @@ describe('match', () => {
 
   it('処理するハンドラーが無ければ、何も出力しない', async () => {
     const { match } = createRouter([
-      { name: 'skip', events: ['issues.closed'], matches: async () => false, run: async () => [] },
+      { name: 'skip', events: ['issues.closed'], matches: async () => false, run: async () => ({}) },
     ]);
 
     assert.equal((await runStep(match, createContext('issues', 'closed'))).outputs.handled, 'false');
@@ -102,7 +102,7 @@ describe('match', () => {
 
   it('設定に問題があれば失敗する', async () => {
     process.env.GITHUB_WORKSPACE = tmpdir();
-    const { match } = createRouter([{ name: 'handle', events: ['issues.closed'], run: async () => [] }]);
+    const { match } = createRouter([{ name: 'handle', events: ['issues.closed'], run: async () => ({}) }]);
 
     const core = await runStep(match, createContext('issues', 'closed'));
 
@@ -145,16 +145,16 @@ describe('route', () => {
         run: async ({ config }) => {
           called.push('first');
           assert.ok(config.agents.agents.claude);
-          return [createRequest()];
+          return { requests: [createRequest()] };
         },
       },
-      { name: 'skip', events: ['issues.closed'], matches: async () => false, run: async () => [createRequest({ id: 'skip' })] },
+      { name: 'skip', events: ['issues.closed'], matches: async () => false, run: async () => ({ requests: [createRequest({ id: 'skip' })] }) },
       {
         name: 'second',
         events: ['issues.closed'],
         run: async () => {
           called.push('second');
-          return [createRequest({ id: 'issue-13', issueNumber: 13 })];
+          return { requests: [createRequest({ id: 'issue-13', issueNumber: 13 })], redispatch: [3, 3, 4] };
         },
       },
     ]);
@@ -173,10 +173,12 @@ describe('route', () => {
     );
     assert.equal(dispatches[0].inputs['request-run-id'], '987');
     assert.deepEqual((await readdir(requestDir)).sort(), ['issue-12.json', 'issue-13.json']);
+    // 振り分けをやり直す Issue は、重複を取り除いて出力する
+    assert.deepEqual(JSON.parse(core.outputs['redispatch-issues']), [3, 4]);
   });
 
   it('依頼が無ければ、何も保存しない', async () => {
-    const { route } = createRouter([{ name: 'handle', events: ['issues.closed'], run: async () => [] }]);
+    const { route } = createRouter([{ name: 'handle', events: ['issues.closed'], run: async () => ({}) }]);
 
     const core = await runStep(route, createContext('issues', 'closed'));
 
@@ -190,11 +192,13 @@ describe('route', () => {
       {
         name: 'handle',
         events: ['issues.closed'],
-        run: async () => [
-          createRequest(),
-          createRequest({ id: 'issue-13', agent: 'jules' }),
-          createRequest({ id: 'issue-12', issueNumber: 14 }),
-        ],
+        run: async () => ({
+          requests: [
+            createRequest(),
+            createRequest({ id: 'issue-13', agent: 'jules' }),
+            createRequest({ id: 'issue-12', issueNumber: 14 }),
+          ],
+        }),
       },
     ]);
 

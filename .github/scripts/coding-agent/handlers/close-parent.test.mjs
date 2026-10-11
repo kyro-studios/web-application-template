@@ -28,7 +28,7 @@ describe('closeParent', () => {
     fake.addIssue({ labels: ['stage:implementation'], parent: planning.number, state: 'closed' });
     const last = fake.addIssue({ labels: ['stage:implementation'], parent: planning.number, state: 'closed' });
 
-    assert.deepEqual(await run(fake, last.number), []);
+    assert.deepEqual(await run(fake, last.number), {});
 
     assert.equal(fake.issues.get(planning.number)?.state, 'closed');
     assert.equal(fake.issues.get(planning.number)?.state_reason, 'completed');

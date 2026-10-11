@@ -14,7 +14,7 @@ import { appendFile, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { getFeatureStage, IMPLEMENTATION_STAGE } from './stages.mjs';
+import { fence, stageName } from './prompt-format.mjs';
 
 /**
  * レビューの依頼の資料 (handlers/request-review.mjs が作る)
@@ -36,28 +36,6 @@ import { getFeatureStage, IMPLEMENTATION_STAGE } from './stages.mjs';
  * @property {string} summary
  * @property {{ severity: 'must' | 'should' | 'nit', path: string | null, line: number | null, body: string }[]} findings
  */
-
-/**
- * 段階の名前を返す。
- *
- * @param {string} stage
- * @returns {string}
- */
-export function stageName(stage) {
-  return stage === IMPLEMENTATION_STAGE ? '実装タスク' : getFeatureStage(stage).name;
-}
-
-/**
- * 信頼できない文章を、Markdown のコードブロックに入れる。文章の中のどの区切りよりも長い区切りを使う。
- *
- * @param {string} text
- * @returns {string}
- */
-export function fence(text) {
-  const longest = Math.max(2, ...[...text.matchAll(/`{3,}|~{3,}/g)].map((match) => match[0].length));
-  const marker = '~'.repeat(longest + 1);
-  return `${marker}text\n${text}\n${marker}`;
-}
 
 /**
  * レビュー担当に渡す指示を組み立てる。

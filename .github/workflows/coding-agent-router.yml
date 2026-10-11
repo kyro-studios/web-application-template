@@ -2,7 +2,7 @@ name: Coding Agent Router
 
 on:
   issues:
-    types: [opened, edited, closed]
+    types: [opened, edited, assigned, closed]
   # 振り分けの処理は既定ブランチのものを使い、PR のコードは実行しない (PR の変更で振り分けを書き換えられないようにする)
   pull_request_target:
     types: [opened, reopened, ready_for_review, synchronize, unlabeled]
@@ -38,6 +38,7 @@ jobs:
       pull-requests: read
     outputs:
       dispatches: ${{ steps.route.outputs.dispatches }}
+      redispatch-issues: ${{ steps.route.outputs.redispatch-issues }}
     steps:
       # cone モードでは、ルート直下のファイル (package.json など) もチェックアウトされる
       - uses: actions/checkout@v7
@@ -97,7 +98,9 @@ jobs:
   dispatch:
     name: エージェントの呼び出し
     needs: route
-    if: needs.route.outputs.dispatches != '' && needs.route.outputs.dispatches != '[]'
+    if: >-
+      (needs.route.outputs.dispatches != '' && needs.route.outputs.dispatches != '[]') ||
+      (needs.route.outputs.redispatch-issues != '' && needs.route.outputs.redispatch-issues != '[]')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -109,10 +112,11 @@ jobs:
           sparse-checkout: .github/scripts
           persist-credentials: false
 
-      - name: エージェントのワークフローを手動実行する
+      - name: エージェントと振り分けのワークフローを手動実行する
         uses: actions/github-script@v9
         env:
           DISPATCHES: ${{ needs.route.outputs.dispatches }}
+          REDISPATCH_ISSUES: ${{ needs.route.outputs.redispatch-issues }}
         with:
           script: |
             const { default: dispatchAgents } = await import(
