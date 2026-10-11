@@ -25,23 +25,23 @@ export const closeParent = {
 
     const parentNumber = await getParentNumber(github, repository, closedNumber);
     if (parentNumber === undefined) {
-      return [];
+      return {};
     }
     const { data } = await github.rest.issues.get({ ...repository, issue_number: parentNumber });
     const parent = /** @type {RestIssue} */ (data);
     if (parent.state !== 'open') {
-      return [];
+      return {};
     }
 
     const isFeature = hasLabel(parent.labels, FEATURE_LABEL);
     const isPlanning = stageOf(parent.labels) === 'planning' && isCoordinator(config.agents, parent.user?.login);
     if (!isFeature && !isPlanning) {
-      return [];
+      return {};
     }
 
     const subIssues = await listSubIssues(github, repository, parentNumber);
     if (subIssues.length === 0 || subIssues.some((issue) => issue.state !== 'closed')) {
-      return [];
+      return {};
     }
 
     await github.rest.issues.createComment({
@@ -53,6 +53,6 @@ export const closeParent = {
     });
     await github.rest.issues.update({ ...repository, issue_number: parentNumber, state: 'closed', state_reason: 'completed' });
     core.info(`#${parentNumber} の Sub Issue がすべて Close されたため、Close しました`);
-    return [];
+    return {};
   },
 };

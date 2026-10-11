@@ -5,10 +5,13 @@
  * 1. match: 読み取り専用の GITHUB_TOKEN で、イベントを処理するハンドラーがあるか判定し、
  *    あれば進行役の GitHub App の Client ID を出力する。ハンドラーが無ければ、App のトークンを発行せずに終われる
  * 2. route: 進行役の GitHub App のトークンで、ハンドラーを実行する。ハンドラーは、Issue の作成などを行い、
- *    エージェントへの依頼の一覧を返す
+ *    エージェントへの依頼と、振り分けをやり直す Issue の一覧を返す
  *
  * 依頼の全体は REQUEST_DIR に保存して Artifact としてアップロードし、エージェントのワークフローの呼び出し方を
  * dispatches として出力する。実際の呼び出しは、actions: write の権限を持つ別のジョブ (dispatch-agents.mjs) が行う。
+ *
+ * 1 つのイベントで複数の Issue を処理する必要がある場合 (Close された Issue を待っていた Issue の起動など) は、
+ * Issue ごとに振り分け用のワークフローを手動実行し直す。同じ Issue の処理を、Issue ごとの concurrency で 1 つずつに絞るため。
  *
  * 環境変数:
  * - GITHUB_WORKSPACE: リポジトリのルート (設定ファイルの読み込みに使う)
@@ -20,11 +23,13 @@
  *
  * 出力 (route):
  * - dispatches: エージェントのワークフローの呼び出し方 (AgentDispatch) の JSON 配列
+ * - redispatch-issues: 振り分けをやり直す Issue の番号の JSON 配列
  */
 
 import { toDispatch, validateRequest, writeRequest } from './agent-request.mjs';
 import { ConfigError, getAgent, loadConfig } from './config.mjs';
 import { closeParent } from './handlers/close-parent.mjs';
+import { launchStage, wakeWaitingStages } from './handlers/launch-stage.mjs';
 import { requestReview } from './handlers/request-review.mjs';
 import { startFeature } from './handlers/start-feature.mjs';
 
@@ -47,14 +52,21 @@ import { startFeature } from './handlers/start-feature.mjs';
  * @property {string} name ログに表示する名前
  * @property {string[]} events 処理するイベント (`<イベント名>.<アクション>`。アクションの無いイベントはイベント名だけ)
  * @property {(args: HandlerArgs) => Promise<boolean>} [matches] イベントを処理するか判定する (読み取り専用のトークンで呼ばれる)。省略すると常に処理する
- * @property {(args: HandlerArgs) => Promise<import('./agent-request.mjs').AgentRequest[]>} run 処理を行い、エージェントへの依頼の一覧を返す (進行役の GitHub App のトークンで呼ばれる)
+ * @property {(args: HandlerArgs) => Promise<HandlerResult>} run 処理を行い、結果を返す (進行役の GitHub App のトークンで呼ばれる)
+ */
+
+/**
+ * イベントごとの処理の結果
+ * @typedef {object} HandlerResult
+ * @property {import('./agent-request.mjs').AgentRequest[]} [requests] エージェントへの依頼
+ * @property {number[]} [redispatch] 振り分けをやり直す Issue の番号
  */
 
 /**
  * イベントごとの処理。作る順番に沿って追加していく。
  * @type {readonly Handler[]}
  */
-export const HANDLERS = [startFeature, closeParent, requestReview];
+export const HANDLERS = [startFeature, closeParent, wakeWaitingStages, launchStage, requestReview];
 
 /**
  * イベントから、ハンドラーを探すためのキーを作る。
@@ -136,6 +148,7 @@ export function createRouter(handlers) {
 
     async route({ github, context, core }) {
       core.setOutput('dispatches', '[]');
+      core.setOutput('redispatch-issues', '[]');
 
       const config = await readConfig(core);
       if (config === undefined) {
@@ -145,9 +158,19 @@ export function createRouter(handlers) {
 
       /** @type {import('./agent-request.mjs').AgentRequest[]} */
       const requests = [];
+      /** @type {Set<number>} */
+      const redispatch = new Set();
       for (const handler of await findHandlers(args)) {
         core.info(`${handler.name} を実行します`);
-        requests.push(...(await handler.run(args)));
+        const result = await handler.run(args);
+        requests.push(...(result.requests ?? []));
+        for (const issueNumber of result.redispatch ?? []) {
+          redispatch.add(issueNumber);
+        }
+      }
+      if (redispatch.size > 0) {
+        core.info(`振り分けをやり直します: ${[...redispatch].map((number) => `#${number}`).join('、')}`);
+        core.setOutput('redispatch-issues', JSON.stringify([...redispatch]));
       }
 
       // 1 件でも問題があれば、どのエージェントも呼び出さない

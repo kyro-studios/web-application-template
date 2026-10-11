@@ -72,18 +72,18 @@ export const requestReview = {
     if (agent !== undefined) {
       if (agent.id === reviewer.id) {
         core.notice(`#${pullRequest.number} はレビュー担当 (${agent.name}) が作った PR のため、レビューしません`);
-        return [];
+        return {};
       }
     } else if (pullRequest.user?.type === 'Bot' || !(await hasWritePermission(github, repository, author))) {
       core.notice(`#${pullRequest.number} の作成者 ${author} は、書き込み権限を持つ人か登録済みのエージェントではないため、レビューしません`);
-      return [];
+      return {};
     }
 
     // PR が Close する段階の Issue を確かめる
     const closing = await getClosingIssueNumbers(github, repository, pullRequest.number);
     if (closing.length === 0) {
       core.info(`#${pullRequest.number} は Issue を Close しない PR のため、レビューしません`);
-      return [];
+      return {};
     }
     if (closing.length > 1) {
       if (notify) {
@@ -94,14 +94,14 @@ export const requestReview = {
         });
       }
       core.notice(`#${pullRequest.number} は複数の Issue を Close するため、レビューしません`);
-      return [];
+      return {};
     }
     const { data } = await github.rest.issues.get({ ...repository, issue_number: closing[0] });
     const issue = /** @type {RestIssue & { body?: string | null }} */ (data);
     const stage = stageOf(issue.labels);
     if (!isCoordinator(config.agents, issue.user?.login) || stage === undefined || stage === 'planning') {
       core.info(`#${pullRequest.number} が Close する #${issue.number} は段階の Issue ではないため、レビューしません`);
-      return [];
+      return {};
     }
 
     // 機能ごとのディレクトリを、機能の親 Issue の機能名から決める
@@ -109,7 +109,7 @@ export const requestReview = {
     const featureName = feature === undefined ? '' : (parseIssueForm(feature.body).get(FEATURE_NAME_FIELD) ?? '');
     if (feature === undefined || !isValidFeatureName(featureName)) {
       core.warning(`#${issue.number} の機能の親 Issue か、その機能名が見つからないため、レビューしません`);
-      return [];
+      return {};
     }
     const featureDir = featureDirectory(config.stages, feature.number, featureName);
     const range = expandStageFiles(config.stages, /** @type {import('../config.mjs').ReviewedStage} */ (stage), featureDir);
@@ -147,6 +147,6 @@ export const requestReview = {
       },
     };
     core.info(`#${pullRequest.number} (${stage}) のレビューを ${reviewer.name} に依頼します`);
-    return [request];
+    return { requests: [request] };
   },
 };

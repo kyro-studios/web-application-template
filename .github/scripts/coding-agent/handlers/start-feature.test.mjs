@@ -36,8 +36,8 @@ function setup({ featureName = 'user-login', permissions = { alice: 'write', 'cl
       repo: { owner: 'kyro-studios', repo: 'sandbox' },
     };
     // @ts-expect-error テストに必要な部分だけを渡す
-    const requests = await startFeature.run({ github: fake.github, context, core, config });
-    return { core, requests };
+    const result = await startFeature.run({ github: fake.github, context, core, config });
+    return { core, requests: result.requests ?? [] };
   };
 
   return { fake, feature, run };

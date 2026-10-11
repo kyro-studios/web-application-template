@@ -153,6 +153,112 @@ export async function getParentNumber(github, repository, issueNumber) {
   return result.repository.issue?.parent?.number;
 }
 
+/**
+ * 依存先の Issue (Sub Issue と Blocked by の Issue)
+ * @typedef {object} DependencyIssue
+ * @property {number} number
+ * @property {'OPEN' | 'CLOSED'} state
+ * @property {{ nodes: { number: number, state: 'OPEN' | 'CLOSED' | 'MERGED' }[] }} closedByPullRequestsReferences 依存先を Close する (した) PR
+ */
+
+/**
+ * @typedef {object} DependencyConnection
+ * @property {number} totalCount
+ * @property {DependencyIssue[]} nodes
+ */
+
+const DEPENDENCY_QUERY = `
+  fragment Dependency on Issue {
+    number
+    state
+    closedByPullRequestsReferences(first: 50, includeClosedPrs: true) {
+      nodes { number state }
+    }
+  }
+
+  query ($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      issue(number: $number) {
+        subIssues(first: 100) { totalCount nodes { ...Dependency } }
+        blockedBy(first: 100) { totalCount nodes { ...Dependency } }
+      }
+    }
+  }
+`;
+
+/**
+ * Issue の依存先 (Sub Issue と Blocked by の Issue) のうち、解決していないものを、理由とあわせて返す。
+ * 依存先が Close されていて、紐づく PR に Open のまま残っているものが無ければ、解決したとみなす
+ * (マージされずに Close された PR は、破棄されたものとして扱う)。
+ *
+ * @param {GitHub} github
+ * @param {Repository} repository
+ * @param {number} issueNumber
+ * @returns {Promise<string[]>} 解決していない理由の一覧 (空なら、すべて解決している)
+ */
+export async function findUnresolvedDependencies(github, repository, issueNumber) {
+  /** @type {{ repository: { issue: { subIssues: DependencyConnection, blockedBy: DependencyConnection } | null } }} */
+  const result = await github.graphql(DEPENDENCY_QUERY, { ...repository, number: issueNumber, headers: GRAPHQL_HEADERS });
+  const issue = result.repository.issue;
+  if (issue === null) {
+    return [`#${issueNumber} が見つかりません`];
+  }
+  return [...unresolvedIn('Sub Issue', issue.subIssues), ...unresolvedIn('Blocked by の Issue', issue.blockedBy)];
+}
+
+/**
+ * @param {string} kind ログに表示する依存先の種類
+ * @param {DependencyConnection} dependencies
+ * @returns {string[]}
+ */
+function unresolvedIn(kind, dependencies) {
+  /** @type {string[]} */
+  const unresolved = [];
+  if (dependencies.totalCount > dependencies.nodes.length) {
+    unresolved.push(`${kind} が多すぎるため判定できません (${dependencies.totalCount} 件)`);
+  }
+  for (const dependency of dependencies.nodes) {
+    if (dependency.state !== 'CLOSED') {
+      unresolved.push(`${kind} #${dependency.number} が Open のままです`);
+      continue;
+    }
+    for (const pullRequest of dependency.closedByPullRequestsReferences.nodes) {
+      if (pullRequest.state === 'OPEN') {
+        unresolved.push(`${kind} #${dependency.number} に紐づく PR #${pullRequest.number} がマージされていません`);
+      }
+    }
+  }
+  return unresolved;
+}
+
+/**
+ * Close された Issue を待っていた Issue (親 Issue と、Blocking していた Issue) の番号を返す。
+ *
+ * @param {GitHub} github
+ * @param {Repository} repository
+ * @param {number} issueNumber Close された Issue
+ * @returns {Promise<number[]>}
+ */
+export async function findWaitingIssueNumbers(github, repository, issueNumber) {
+  /** @type {{ repository: { issue: { parent: { number: number } | null, blocking: { nodes: { number: number }[] } } | null } }} */
+  const result = await github.graphql(
+    `query ($owner: String!, $repo: String!, $number: Int!) {
+      repository(owner: $owner, name: $repo) {
+        issue(number: $number) {
+          parent { number }
+          blocking(first: 100) { nodes { number } }
+        }
+      }
+    }`,
+    { ...repository, number: issueNumber, headers: GRAPHQL_HEADERS },
+  );
+  const issue = result.repository.issue;
+  if (issue === null) {
+    return [];
+  }
+  return [...new Set([...(issue.parent === null ? [] : [issue.parent.number]), ...issue.blocking.nodes.map((node) => node.number)])];
+}
+
 /** 親をたどる回数の上限 (Sub Issue の階層の上限は 8) */
 const MAX_ANCESTORS = 8;
 
