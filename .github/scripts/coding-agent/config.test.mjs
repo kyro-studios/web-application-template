@@ -3,7 +3,7 @@ import { cp, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fixtureAgentsConfig, ROOT_DIR } from './testing/fixture-config.mjs';
 import {
   CONFIG_DIR,
   ConfigError,
@@ -12,45 +12,19 @@ import {
   findAgentByAssignee,
   findAgentByBot,
   getAgent,
+  isCoordinator,
   isValidFeatureName,
   loadConfig,
   validateAgentRelations,
 } from './config.mjs';
 
-const ROOT_DIR = fileURLToPath(new URL('../../../', import.meta.url));
-
-/**
- * @returns {import('./config.mjs').AgentsConfig}
- */
-function createAgentsConfig() {
-  /**
-   * @param {string} id
-   * @returns {import('./config.mjs').Agent}
-   */
-  const agent = (id) => ({
-    name: id,
-    assignee: `${id}-account`,
-    bot: `${id}-app[bot]`,
-    workflow: `coding-agent-${id}.yml`,
-    appClientId: `${id}-client-id`,
-    appPrivateKeyRef: `op://CI/${id}/private key`,
-    apiKeyRef: `op://CI/${id}/credential`,
-  });
-  return {
-    agents: { claude: agent('claude'), codex: agent('codex') },
-    roles: {
-      author: { specification: 'claude', 'domain-model': 'claude', architecture: 'claude', planning: 'claude' },
-      implementers: ['claude'],
-      reviewer: 'codex',
-    },
-  };
-}
+const createAgentsConfig = fixtureAgentsConfig;
 
 describe('loadConfig', () => {
   it('リポジトリの設定ファイルを読み込める', async () => {
+    // テンプレートから作ったリポジトリで書き換えた設定も、ここで検証される
     const config = await loadConfig(ROOT_DIR);
     assert.ok(Object.keys(config.agents.agents).length > 0);
-    assert.equal(config.stages.featureRoot, 'docs/features');
   });
 
   describe('設定に問題がある場合', () => {
@@ -121,6 +95,22 @@ describe('validateAgentRelations', () => {
     config.agents.codex.bot = 'Claude-App[bot]';
 
     assert.deepEqual(validateAgentRelations(config), ['agents.json: "claude" と "codex" の bot が同じです']);
+  });
+
+  it('進行役の Bot 名をエージェントと同じにできない', () => {
+    const config = createAgentsConfig();
+    config.agents.claude.bot = 'Coordinator-App[bot]';
+
+    assert.deepEqual(validateAgentRelations(config), ['agents.json: coordinator と "claude" の bot が同じです']);
+  });
+});
+
+describe('isCoordinator', () => {
+  it('進行役の Bot か判定する (大文字と小文字は区別しない)', () => {
+    const config = createAgentsConfig();
+    assert.equal(isCoordinator(config, 'COORDINATOR-APP[bot]'), true);
+    assert.equal(isCoordinator(config, 'claude-app[bot]'), false);
+    assert.equal(isCoordinator(config, undefined), false);
   });
 });
 

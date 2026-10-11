@@ -6,6 +6,16 @@
     "$schema": {
       "type": "string"
     },
+    "coordinator": {
+      "description": "進行役の GitHub App。段階の Issue の作成や親 Issue の Close など、振り分け用のワークフローの書き込みに使う",
+      "type": "object",
+      "properties": {
+        "bot": { "$ref": "#/$defs/bot" },
+        "appClientId": { "$ref": "#/$defs/appClientId" }
+      },
+      "required": ["bot", "appClientId"],
+      "additionalProperties": false
+    },
     "agents": {
       "description": "登録するエージェント。キーはエージェントの識別子",
       "type": "object",
@@ -49,16 +59,22 @@
       "additionalProperties": false
     }
   },
-  "required": ["agents", "roles"],
+  "required": ["coordinator", "agents", "roles"],
   "additionalProperties": false,
   "$defs": {
     "agentId": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9-]{0,49}$"
     },
-    "onePasswordRef": {
+    "bot": {
+      "description": "GitHub App の Bot 名 (<slug>[bot])",
       "type": "string",
-      "pattern": "^op://[^/]+/[^/]+/.+$"
+      "pattern": "^[a-z0-9][a-z0-9-]*\\[bot\\]$"
+    },
+    "appClientId": {
+      "description": "GitHub App の Client ID",
+      "type": "string",
+      "minLength": 1
     },
     "agent": {
       "type": "object",
@@ -73,36 +89,20 @@
           "type": "string",
           "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$"
         },
-        "bot": {
-          "description": "GitHub App の Bot 名 (<slug>[bot])",
-          "type": "string",
-          "pattern": "^[a-z0-9][a-z0-9-]*\\[bot\\]$"
-        },
+        "bot": { "$ref": "#/$defs/bot" },
         "workflow": {
           "description": "エージェントを動かすワークフローのファイル名",
           "type": "string",
           "pattern": "^[A-Za-z0-9._-]+\\.ya?ml$"
         },
-        "appClientId": {
-          "description": "GitHub App の Client ID",
-          "type": "string",
-          "minLength": 1
-        },
-        "appPrivateKeyRef": {
-          "description": "GitHub App の秘密鍵の 1Password の参照",
-          "$ref": "#/$defs/onePasswordRef"
-        },
-        "apiKeyRef": {
-          "description": "エージェントの API キーの 1Password の参照",
-          "$ref": "#/$defs/onePasswordRef"
-        },
+        "appClientId": { "$ref": "#/$defs/appClientId" },
         "model": {
           "description": "エージェントが使うモデル。null ならエージェントの既定",
           "type": ["string", "null"],
           "minLength": 1
         }
       },
-      "required": ["name", "assignee", "bot", "workflow", "appClientId", "appPrivateKeyRef", "apiKeyRef"],
+      "required": ["name", "assignee", "bot", "workflow", "appClientId"],
       "additionalProperties": false
     }
   }
