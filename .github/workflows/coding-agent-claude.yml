@@ -1,0 +1,177 @@
+name: Coding Agent (Claude)
+
+# 振り分け用のワークフローが、作成の依頼ごとに手動実行 (workflow_dispatch) する。
+# 入力の形式は、すべてのエージェントのワークフローで共通にしている (仕様の 2.2)。
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 依頼の種類 (このワークフローは今は create だけを受け付ける)
+        type: string
+        required: true
+      stage:
+        description: 段階
+        type: string
+        required: true
+      issue-number:
+        description: 対象の Issue の番号
+        type: string
+        required: true
+      pull-request-number:
+        description: 対象の PR の番号 (作成のときは空)
+        type: string
+        required: false
+        default: ''
+      target-sha:
+        description: 作業を始めるコミット
+        type: string
+        required: true
+      request-run-id:
+        description: 依頼の Artifact を保存した、振り分け用のワークフローの実行の ID
+        type: string
+        required: true
+      request-id:
+        description: 依頼の識別子 (Artifact の中のファイル名)
+        type: string
+        required: true
+
+permissions: {}
+
+# 同じ Issue や PR への作業は、1 つずつ行う (作業の途中で取り消さない)
+concurrency:
+  group: coding-agent-claude-${{ inputs.pull-request-number || inputs.issue-number }}
+  cancel-in-progress: false
+
+jobs:
+  create:
+    name: Claude による作成
+    if: vars.CODING_AGENT_ENABLED == 'true' && inputs.mode == 'create'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # 作成担当には書き込み権限を持つトークンを渡さない (push と PR の作成は publish ジョブが行う)
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      # 依頼の Artifact を、振り分け用のワークフローの実行から取得する
+      actions: read
+    outputs:
+      agent: ${{ steps.request.outputs.agent }}
+    steps:
+      - name: 作業を始めるコミットをチェックアウトする
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.target-sha }}
+          persist-credentials: false
+
+      # 指示やスクリプトは既定ブランチのものを使い、作業ディレクトリの外に置く (変更内容に含めないため)
+      - name: 既定ブランチの仕組みをチェックアウトする
+        uses: actions/checkout@v7
+        with:
+          path: coding-agent-trusted
+          sparse-checkout: .github
+          persist-credentials: false
+
+      - name: 既定ブランチの仕組みを作業ディレクトリの外に移す
+        run: mv coding-agent-trusted "$RUNNER_TEMP/trusted"
+
+      - name: 依頼を取得する
+        uses: actions/download-artifact@v8
+        with:
+          name: coding-agent-requests
+          run-id: ${{ inputs.request-run-id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/coding-agent-requests
+
+      - name: 依頼の内容を確かめる
+        id: request
+        env:
+          REQUEST_ID: ${{ inputs.request-id }}
+          TARGET_SHA: ${{ inputs.target-sha }}
+          REQUEST_DIR: ${{ runner.temp }}/coding-agent-requests
+          TRUSTED: ${{ runner.temp }}/trusted
+        run: |
+          set -euo pipefail
+          if [[ ! "$REQUEST_ID" =~ ^[a-z0-9][a-z0-9-]{0,63}$ ]]; then
+            echo "::error::依頼の識別子の形式が正しくありません: $REQUEST_ID"
+            exit 1
+          fi
+          request="$REQUEST_DIR/$REQUEST_ID.json"
+          if [ "$(jq -r '.mode' "$request")" != 'create' ] || [ "$(jq -r '.targetSha' "$request")" != "$TARGET_SHA" ]; then
+            echo "::error::依頼の内容が、ワークフローの入力と一致しません"
+            exit 1
+          fi
+          agent="$(jq -r '.agent' "$request")"
+          model="$(jq -r --arg agent "$agent" '.agents[$agent].model // ""' "$TRUSTED/.github/coding-agent/agents.json")"
+          echo "agent=$agent" >> "$GITHUB_OUTPUT"
+          echo "model-args=$([ -n "$model" ] && printf -- '--model %s' "$model")" >> "$GITHUB_OUTPUT"
+          echo "result-schema=$(jq -c . "$TRUSTED/.github/coding-agent/result-schema.json")" >> "$GITHUB_OUTPUT"
+
+      - name: 作成の指示を作る
+        id: prompt
+        env:
+          REQUEST_FILE: ${{ runner.temp }}/coding-agent-requests/${{ inputs.request-id }}.json
+          TRUSTED: ${{ runner.temp }}/trusted
+        run: |
+          set -euo pipefail
+          node "$TRUSTED/.github/scripts/coding-agent/create-prompt.mjs" \
+            --request "$REQUEST_FILE" \
+            --prompts "$TRUSTED/.github/coding-agent/prompts/create" \
+            --prompt-out "$RUNNER_TEMP/create-prompt.md"
+          delimiter="PROMPT_$(openssl rand -hex 16)"
+          {
+            echo "prompt<<$delimiter"
+            cat "$RUNNER_TEMP/create-prompt.md"
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Claude Code で作成する
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # 読み取り専用の GITHUB_TOKEN を渡し、Claude GitHub App の書き込み可能なトークンを使わせない
+          github_token: ${{ github.token }}
+          # 振り分け用のワークフロー (github-actions[bot]) からの手動実行を許可する
+          allowed_bots: github-actions
+          # 文書の段階では、ファイルを読み書きするだけで、コマンドは実行しない
+          claude_args: >-
+            --allowedTools "Read,Edit,Write,Glob,Grep"
+            --json-schema '${{ steps.request.outputs.result-schema }}'
+            ${{ steps.request.outputs.model-args }}
+          prompt: ${{ steps.prompt.outputs.prompt }}
+
+      - name: 変更内容をまとめる
+        env:
+          TARGET_SHA: ${{ inputs.target-sha }}
+          STRUCTURED_OUTPUT: ${{ steps.claude.outputs.structured_output }}
+          RESULT_DIR: ${{ runner.temp }}/coding-agent-result
+        run: |
+          set -euo pipefail
+          mkdir -p "$RESULT_DIR"
+          printf '%s' "$STRUCTURED_OUTPUT" > "$RESULT_DIR/result.json"
+          # エージェントが指示に反してコミットしていても漏れないよう、作業を始めたコミットと比較する
+          git add --all
+          git diff --cached --binary "$TARGET_SHA" > "$RESULT_DIR/changes.patch"
+          git diff --cached --stat "$TARGET_SHA"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coding-agent-result
+          path: ${{ runner.temp }}/coding-agent-result
+          retention-days: 7
+
+  publish:
+    needs: create
+    uses: ./.github/workflows/coding-agent-publish.yml
+    permissions:
+      contents: read
+    with:
+      agent: ${{ needs.create.outputs.agent }}
+      mode: ${{ inputs.mode }}
+      issue-number: ${{ inputs.issue-number }}
+      target-sha: ${{ inputs.target-sha }}
+      artifact-name: coding-agent-result
+    secrets:
+      # Organization か利用するリポジトリの Secrets に登録した、Claude 用の App の秘密鍵
+      app-private-key: ${{ secrets.CODING_AGENT_CLAUDE_PRIVATE_KEY }}

@@ -20,7 +20,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CONFIG_DIR, validateWithSchema } from './config.mjs';
 import { listChangedFiles } from './github-pulls.mjs';
-import { stageName } from './review-prompt.mjs';
+import { stageName } from './prompt-format.mjs';
 
 /**
  * actions/github-script がスクリプトに渡す引数

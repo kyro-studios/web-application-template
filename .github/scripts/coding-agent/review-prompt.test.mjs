@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { buildReviewPrompt, fence, violationReview } from './review-prompt.mjs';
+import { fence } from './prompt-format.mjs';
+import { buildReviewPrompt, violationReview } from './review-prompt.mjs';
 
 /**
  * @param {Partial<import('./review-prompt.mjs').ReviewMaterials>} [overrides]
