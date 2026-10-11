@@ -1,12 +1,12 @@
 name: Coding Agent (Claude)
 
-# 振り分け用のワークフローが、作成の依頼ごとに手動実行 (workflow_dispatch) する。
+# 振り分け用のワークフローが、作成や修正の依頼ごとに手動実行 (workflow_dispatch) する。
 # 入力の形式は、すべてのエージェントのワークフローで共通にしている (仕様の 2.2)。
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 依頼の種類 (このワークフローは今は create だけを受け付ける)
+        description: 依頼の種類 (このワークフローは create と fix を受け付ける)
         type: string
         required: true
       stage:
@@ -23,7 +23,7 @@ on:
         required: false
         default: ''
       target-sha:
-        description: 作業を始めるコミット
+        description: 作業を始めるコミット (修正のときは、PR の head)
         type: string
         required: true
       request-run-id:
@@ -43,9 +43,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  create:
-    name: Claude による作成
-    if: vars.CODING_AGENT_ENABLED == 'true' && inputs.mode == 'create'
+  work:
+    name: Claude による作業
+    if: vars.CODING_AGENT_ENABLED == 'true' && (inputs.mode == 'create' || inputs.mode == 'fix')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     # 作成担当には書き込み権限を持つトークンを渡さない (push と PR の作成は publish ジョブが行う)
@@ -87,6 +87,7 @@ jobs:
         id: request
         env:
           REQUEST_ID: ${{ inputs.request-id }}
+          MODE: ${{ inputs.mode }}
           TARGET_SHA: ${{ inputs.target-sha }}
           REQUEST_DIR: ${{ runner.temp }}/coding-agent-requests
           TRUSTED: ${{ runner.temp }}/trusted
@@ -97,7 +98,7 @@ jobs:
             exit 1
           fi
           request="$REQUEST_DIR/$REQUEST_ID.json"
-          if [ "$(jq -r '.mode' "$request")" != 'create' ] || [ "$(jq -r '.targetSha' "$request")" != "$TARGET_SHA" ]; then
+          if [ "$(jq -r '.mode' "$request")" != "$MODE" ] || [ "$(jq -r '.targetSha' "$request")" != "$TARGET_SHA" ]; then
             echo "::error::依頼の内容が、ワークフローの入力と一致しません"
             exit 1
           fi
@@ -107,25 +108,25 @@ jobs:
           echo "model-args=$([ -n "$model" ] && printf -- '--model %s' "$model")" >> "$GITHUB_OUTPUT"
           echo "result-schema=$(jq -c . "$TRUSTED/.github/coding-agent/result-schema.json")" >> "$GITHUB_OUTPUT"
 
-      - name: 作成の指示を作る
+      - name: 作業の指示を作る
         id: prompt
         env:
           REQUEST_FILE: ${{ runner.temp }}/coding-agent-requests/${{ inputs.request-id }}.json
           TRUSTED: ${{ runner.temp }}/trusted
         run: |
           set -euo pipefail
-          node "$TRUSTED/.github/scripts/coding-agent/create-prompt.mjs" \
+          node "$TRUSTED/.github/scripts/coding-agent/author-prompt.mjs" \
             --request "$REQUEST_FILE" \
-            --prompts "$TRUSTED/.github/coding-agent/prompts/create" \
-            --prompt-out "$RUNNER_TEMP/create-prompt.md"
+            --prompts "$TRUSTED/.github/coding-agent/prompts" \
+            --prompt-out "$RUNNER_TEMP/author-prompt.md"
           delimiter="PROMPT_$(openssl rand -hex 16)"
           {
             echo "prompt<<$delimiter"
-            cat "$RUNNER_TEMP/create-prompt.md"
+            cat "$RUNNER_TEMP/author-prompt.md"
             echo "$delimiter"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Claude Code で作成する
+      - name: Claude Code で作業する
         id: claude
         uses: anthropics/claude-code-action@v1
         with:
@@ -162,14 +163,15 @@ jobs:
           retention-days: 7
 
   publish:
-    needs: create
+    needs: work
     uses: ./.github/workflows/coding-agent-publish.yml
     permissions:
       contents: read
     with:
-      agent: ${{ needs.create.outputs.agent }}
+      agent: ${{ needs.work.outputs.agent }}
       mode: ${{ inputs.mode }}
       issue-number: ${{ inputs.issue-number }}
+      pull-request-number: ${{ inputs.pull-request-number }}
       target-sha: ${{ inputs.target-sha }}
       artifact-name: coding-agent-result
     secrets:

@@ -25,6 +25,7 @@
  * @property {{ filename: string, previous_filename?: string, patch?: string }[]} files 変更されたファイル
  * @property {{ id: number, state: string, commit_id: string, submitted_at: string, body: string, user: { login: string } }[]} reviews
  * @property {{ pull_request_review_id: number, path: string, line: number | null, body: string }[]} reviewComments
+ * @property {Record<string, any>} [detail] pulls.get が返す PR の内容 (state、head、base など)
  */
 
 /**
@@ -35,10 +36,15 @@
 export function createFakeGitHub({ actor, permissions = {} }) {
   /** @type {Map<number, FakeIssue>} */
   const issues = new Map();
-  /** @type {{ issue_number: number, body: string, user: { login: string } }[]} */
+  /** @type {{ issue_number: number, body: string, user: { login: string }, created_at?: string }[]} */
   const comments = [];
   /** @type {Record<string, string>} */
   const branches = {};
+  /** @type {{ issue_number: number, event: string, label?: { name: string }, created_at: string }[]} */
+  const events = [];
+  /** コメントやイベントの日時 (追加した順に進める) */
+  let clock = Date.parse('2026-10-01T00:00:00Z');
+  const now = () => new Date((clock += 1000)).toISOString();
   /** @type {Map<number, FakePullRequest>} */
   const pulls = new Map();
   let nextNumber = 1;
@@ -51,6 +57,24 @@ export function createFakeGitHub({ actor, permissions = {} }) {
    */
   const addPull = (number, fields = {}) => {
     pulls.set(number, { closing: [], files: [], reviews: [], reviewComments: [], ...fields });
+    // Issue の API でも PR を取得できるようにする
+    const detail = fields.detail ?? {};
+    issues.set(number, {
+      id: 1000 + number,
+      node_id: `PR_${number}`,
+      number,
+      title: detail.title ?? `PR ${number}`,
+      body: detail.body ?? '',
+      state: detail.state ?? 'open',
+      state_reason: null,
+      user: detail.user ?? { login: actor },
+      labels: detail.labels ?? [],
+      assignees: [],
+      parent: undefined,
+      blockedBy: [],
+      closingPulls: [],
+      pull_request: {},
+    });
   };
 
   /** @param {number} number */
@@ -63,6 +87,11 @@ export function createFakeGitHub({ actor, permissions = {} }) {
   };
 
   const pullsApi = {
+    /** @param {{ pull_number: number }} params */
+    get: async ({ pull_number }) => {
+      const issue = issues.get(pull_number);
+      return { data: structuredClone({ ...getPull(pull_number).detail, labels: issue?.labels ?? [], number: pull_number }) };
+    },
     /** @param {{ pull_number: number }} params */
     listFiles: async ({ pull_number }) => ({ data: structuredClone(getPull(pull_number).files) }),
     /** @param {{ pull_number: number }} params */
@@ -153,9 +182,29 @@ export function createFakeGitHub({ actor, permissions = {} }) {
         },
         /** @param {{ issue_number: number, body: string }} params */
         createComment: async ({ issue_number, body }) => {
-          comments.push({ issue_number, body, user: { login: actor } });
+          comments.push({ issue_number, body, user: { login: actor }, created_at: now() });
           return { data: {} };
         },
+        /** @param {{ issue_number: number, labels: string[] }} params */
+        addLabels: async ({ issue_number, labels }) => {
+          const issue = getIssue(issue_number);
+          for (const name of labels) {
+            if (!issue.labels.some((label) => label.name === name)) {
+              issue.labels.push({ name });
+              events.push({ issue_number, event: 'labeled', label: { name }, created_at: now() });
+            }
+          }
+          return { data: structuredClone(issue.labels) };
+        },
+        /** @param {{ issue_number: number, name: string }} params */
+        removeLabel: async ({ issue_number, name }) => {
+          const issue = getIssue(issue_number);
+          issue.labels = issue.labels.filter((label) => label.name !== name);
+          events.push({ issue_number, event: 'unlabeled', label: { name }, created_at: now() });
+          return { data: structuredClone(issue.labels) };
+        },
+        /** @param {{ issue_number: number }} params */
+        listEvents: async ({ issue_number }) => ({ data: structuredClone(events.filter((event) => event.issue_number === issue_number)) }),
         /** @param {{ issue_number: number }} params */
         listComments: async ({ issue_number }) => ({
           data: structuredClone(comments.filter((comment) => comment.issue_number === issue_number)),
@@ -177,6 +226,9 @@ export function createFakeGitHub({ actor, permissions = {} }) {
     paginate: async (route, params) => {
       if (route === github.rest.issues.listComments) {
         return (await github.rest.issues.listComments(/** @type {any} */ (params))).data;
+      }
+      if (route === github.rest.issues.listEvents) {
+        return (await github.rest.issues.listEvents(/** @type {any} */ (params))).data;
       }
       for (const [name, method] of Object.entries(pullsApi)) {
         if (route === method) {
@@ -254,7 +306,18 @@ export function createFakeGitHub({ actor, permissions = {} }) {
     },
   };
 
-  return { github, issues, comments, pulls, branches, addIssue, addPull };
+  /**
+   * 別のアカウントのコメントを追加する。
+   *
+   * @param {number} issueNumber
+   * @param {string} login
+   * @param {string} body
+   */
+  const addComment = (issueNumber, login, body) => {
+    comments.push({ issue_number: issueNumber, body, user: { login }, created_at: now() });
+  };
+
+  return { github, issues, comments, pulls, branches, events, addIssue, addPull, addComment };
 }
 
 /**

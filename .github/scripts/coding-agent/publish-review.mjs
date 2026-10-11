@@ -14,6 +14,9 @@
  * - STAGE: 段階
  * - REVIEWER_NAME: レビュー担当の表示名
  * - RUN_URL: ワークフローの実行の URL
+ *
+ * 出力:
+ * - event: 投稿したレビューの種類 (APPROVE か REQUEST_CHANGES)。投稿しなかった場合は空
  */
 
 import { readFile } from 'node:fs/promises';
@@ -119,6 +122,7 @@ export function buildSubmission({ review, commentable, stage, reviewerName, runU
  * @returns {Promise<void>}
  */
 export default async function publishReview({ github, context, core }) {
+  core.setOutput('event', '');
   const repository = context.repo;
   const pullRequestNumber = Number.parseInt(process.env.PULL_REQUEST_NUMBER ?? '', 10);
   const targetSha = process.env.TARGET_SHA ?? '';
@@ -165,6 +169,7 @@ export default async function publishReview({ github, context, core }) {
     comments: submission.comments,
   });
   core.info(`#${pullRequestNumber} に ${submission.event} のレビューを投稿しました (行へのコメント ${submission.comments.length} 件)`);
+  core.setOutput('event', submission.event);
 
   if (submission.event === 'APPROVE') {
     await enableAutoMerge({ github, core, pullRequestId: pullRequest.node_id, targetSha, pullRequestNumber });
