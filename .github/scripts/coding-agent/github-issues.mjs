@@ -259,6 +259,23 @@ export async function findWaitingIssueNumbers(github, repository, issueNumber) {
   return [...new Set([...(issue.parent === null ? [] : [issue.parent.number]), ...issue.blocking.nodes.map((node) => node.number)])];
 }
 
+/**
+ * Issue の深さ (親の無い Issue を 1 とする) を返す。
+ *
+ * @param {GitHub} github
+ * @param {Repository} repository
+ * @param {number} issueNumber
+ * @returns {Promise<number>}
+ */
+export async function measureIssueDepth(github, repository, issueNumber) {
+  let depth = 1;
+  for (let current = await getParentNumber(github, repository, issueNumber); current !== undefined; ) {
+    depth++;
+    current = await getParentNumber(github, repository, current);
+  }
+  return depth;
+}
+
 /** 親をたどる回数の上限 (Sub Issue の階層の上限は 8) */
 const MAX_ANCESTORS = 8;
 

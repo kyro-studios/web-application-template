@@ -82,6 +82,8 @@ jobs:
           REQUEST_DIR: ${{ runner.temp }}/coding-agent-requests
           # エージェントが修正する回数の上限 (未設定なら 3)
           REVIEW_MAX_FIX_ROUNDS: ${{ vars.REVIEW_MAX_FIX_ROUNDS }}
+          # 1 回の実装計画で作成できる実装タスクの上限 (未設定なら 30)
+          PLANNER_MAX_TASKS: ${{ vars.PLANNER_MAX_TASKS }}
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |

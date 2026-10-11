@@ -3,7 +3,7 @@
   "properties": {
     "summary": {
       "type": "string",
-      "description": "計画全体の概要 (Markdown)。設計 Issue へのコメントに使う"
+      "description": "計画全体の概要 (Markdown)。実装計画の Issue へのコメントに使う"
     },
     "tasks": {
       "type": "array",
@@ -29,12 +29,11 @@
           },
           "agent": {
             "type": ["string", "null"],
-            "enum": ["claude-code", "codex", "jules", null],
-            "description": "担当エージェント。人が対応するタスクや、子タスクをまとめるだけのタスクは null"
+            "description": "担当エージェントの識別子 (依頼の内容で示したもののどれか)。人が対応するタスクや、子タスクをまとめるだけのタスクは null"
           },
           "parent": {
             "type": ["string", "null"],
-            "description": "親タスクの key。設計 Issue の直下に置く場合は null"
+            "description": "親タスクの key。実装計画の Issue の直下に置く場合は null"
           },
           "blocked_by": {
             "type": "array",
