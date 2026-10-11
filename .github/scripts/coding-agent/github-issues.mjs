@@ -153,6 +153,31 @@ export async function getParentNumber(github, repository, issueNumber) {
   return result.repository.issue?.parent?.number;
 }
 
+/** 親をたどる回数の上限 (Sub Issue の階層の上限は 8) */
+const MAX_ANCESTORS = 8;
+
+/**
+ * Issue 自身か、その祖先から、指定したラベルの付いた最も近い Issue を探す。
+ *
+ * @param {GitHub} github
+ * @param {Repository} repository
+ * @param {number} issueNumber
+ * @param {string} label
+ * @returns {Promise<(RestIssue & { body?: string | null }) | undefined>}
+ */
+export async function findLabeledAncestor(github, repository, issueNumber, label) {
+  /** @type {number | undefined} */
+  let current = issueNumber;
+  for (let depth = 0; current !== undefined && depth <= MAX_ANCESTORS; depth++) {
+    const { data } = await github.rest.issues.get({ ...repository, issue_number: current });
+    if (hasLabel(/** @type {RestIssue} */ (data).labels, label)) {
+      return /** @type {RestIssue & { body?: string | null }} */ (data);
+    }
+    current = await getParentNumber(github, repository, current);
+  }
+  return undefined;
+}
+
 /**
  * ラベルの一覧に、指定した名前のラベルが含まれているか判定する。
  *
