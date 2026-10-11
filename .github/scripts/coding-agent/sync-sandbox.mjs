@@ -4,7 +4,8 @@
  * テンプレートから作ったリポジトリは、テンプレートの後の変更を自動では受け取らない。また、Issue のイベントで
  * 動くワークフローは既定ブランチ (develop) のものが使われるため、動作確認の前に develop へ反映する必要がある。
  * develop はルールセットで保護されているため、取り込みを push する間だけルールセットを無効にし、必ず有効に戻す。
- * 確認用のリポジトリに固有の設定 (KEPT_PATHS) は、テンプレートの内容で置き換えずに残す。--agents を指定すると、
+ * 確認用のリポジトリに固有の設定 (KEPT_PATHS) と、成果物を置くディレクトリ (stages.json の featureRoot) は、
+ * テンプレートの内容で置き換えずに残す。--agents を指定すると、
  * 手元のファイルで agents.json を置き換える。push する前に、取り込んだ後の設定ファイルを検証する。
  *
  * 確認用のリポジトリの管理者が、gh コマンドにログインした状態で実行する。
@@ -118,6 +119,21 @@ function ghApi(method, path, body) {
 }
 
 /**
+ * 確認用のリポジトリの、成果物を置くディレクトリを返す。stages.json が無ければ空の配列を返す。
+ *
+ * @param {string} cwd 確認用のリポジトリを clone したディレクトリ
+ * @returns {string[]}
+ */
+function featureRootOf(cwd) {
+  try {
+    const stages = JSON.parse(git(['show', `HEAD:${CONFIG_DIR}/stages.json`], { cwd }));
+    return typeof stages.featureRoot === 'string' && stages.featureRoot !== '' ? [stages.featureRoot] : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * @param {SyncOptions} options
  */
 async function sync(options) {
@@ -131,7 +147,7 @@ async function sync(options) {
     // ファイルの中身をテンプレートと同じにする (テンプレートで削除したファイルも削除する)
     git(['rm', '-r', '--quiet', '--ignore-unmatch', '.'], { cwd });
     git(['checkout', 'FETCH_HEAD', '--', '.'], { cwd });
-    for (const path of KEPT_PATHS) {
+    for (const path of [...KEPT_PATHS, ...featureRootOf(cwd)]) {
       if (git(['ls-tree', '--name-only', 'HEAD', '--', path], { cwd }) !== '') {
         git(['checkout', 'HEAD', '--', path], { cwd });
       }
