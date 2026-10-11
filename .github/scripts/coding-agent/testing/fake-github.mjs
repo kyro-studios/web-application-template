@@ -19,6 +19,14 @@
  */
 
 /**
+ * @typedef {object} FakePullRequest
+ * @property {number[]} closing PR が Close する Issue の番号
+ * @property {{ filename: string, previous_filename?: string, patch?: string }[]} files 変更されたファイル
+ * @property {{ id: number, state: string, commit_id: string, submitted_at: string, body: string, user: { login: string } }[]} reviews
+ * @property {{ pull_request_review_id: number, path: string, line: number | null, body: string }[]} reviewComments
+ */
+
+/**
  * @param {object} options
  * @param {string} options.actor API を呼び出すアカウント (作成した Issue の作成者になる)
  * @param {Record<string, string>} [options.permissions] アカウントごとのリポジトリの権限 (無ければコラボレーターでない)
@@ -28,7 +36,37 @@ export function createFakeGitHub({ actor, permissions = {} }) {
   const issues = new Map();
   /** @type {{ issue_number: number, body: string }[]} */
   const comments = [];
+  /** @type {Map<number, FakePullRequest>} */
+  const pulls = new Map();
   let nextNumber = 1;
+
+  /**
+   * PR の情報を登録する (Issue と番号が重ならないように指定する)。
+   *
+   * @param {number} number
+   * @param {Partial<FakePullRequest>} [fields]
+   */
+  const addPull = (number, fields = {}) => {
+    pulls.set(number, { closing: [], files: [], reviews: [], reviewComments: [], ...fields });
+  };
+
+  /** @param {number} number */
+  const getPull = (number) => {
+    const pull = pulls.get(number);
+    if (pull === undefined) {
+      throw Object.assign(new Error(), { status: 404 });
+    }
+    return pull;
+  };
+
+  const pullsApi = {
+    /** @param {{ pull_number: number }} params */
+    listFiles: async ({ pull_number }) => ({ data: structuredClone(getPull(pull_number).files) }),
+    /** @param {{ pull_number: number }} params */
+    listReviews: async ({ pull_number }) => ({ data: structuredClone(getPull(pull_number).reviews) }),
+    /** @param {{ pull_number: number }} params */
+    listReviewComments: async ({ pull_number }) => ({ data: structuredClone(getPull(pull_number).reviewComments) }),
+  };
 
   /**
    * @param {{ title?: string, body?: string, labels?: string[], user?: string, state?: 'open' | 'closed', parent?: number }} fields
@@ -74,6 +112,7 @@ export function createFakeGitHub({ actor, permissions = {} }) {
 
   const github = {
     rest: {
+      pulls: pullsApi,
       repos: {
         /** @param {{ username: string }} params */
         getCollaboratorPermissionLevel: async ({ username }) => {
@@ -120,6 +159,11 @@ export function createFakeGitHub({ actor, permissions = {} }) {
      * @param {{ issue_number: number }} params
      */
     paginate: async (route, params) => {
+      for (const [name, method] of Object.entries(pullsApi)) {
+        if (route === method) {
+          return (await pullsApi[/** @type {keyof typeof pullsApi} */ (name)](/** @type {any} */ (params))).data;
+        }
+      }
       if (route === 'GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues') {
         return [...issues.values()].filter((issue) => issue.parent === params.issue_number).map((issue) => structuredClone(issue));
       }
@@ -156,6 +200,10 @@ export function createFakeGitHub({ actor, permissions = {} }) {
         issue.blockedBy.push(blocking.number);
         return { addBlockedBy: { issue: { id: issue.node_id } } };
       }
+      if (query.includes('closingIssuesReferences')) {
+        const pull = pulls.get(variables.number);
+        return { repository: { pullRequest: pull && { closingIssuesReferences: { nodes: pull.closing.map((number) => ({ number })) } } } };
+      }
       const issue = issues.get(variables.number) ?? null;
       if (query.includes('blockedBy(first')) {
         return { repository: { issue: issue && { blockedBy: { nodes: issue.blockedBy.map((number) => ({ number })) } } } };
@@ -167,7 +215,7 @@ export function createFakeGitHub({ actor, permissions = {} }) {
     },
   };
 
-  return { github, issues, comments, addIssue };
+  return { github, issues, comments, pulls, addIssue, addPull };
 }
 
 /**

@@ -25,6 +25,7 @@
 import { toDispatch, validateRequest, writeRequest } from './agent-request.mjs';
 import { ConfigError, getAgent, loadConfig } from './config.mjs';
 import { closeParent } from './handlers/close-parent.mjs';
+import { requestReview } from './handlers/request-review.mjs';
 import { startFeature } from './handlers/start-feature.mjs';
 
 /**
@@ -53,7 +54,7 @@ import { startFeature } from './handlers/start-feature.mjs';
  * イベントごとの処理。作る順番に沿って追加していく。
  * @type {readonly Handler[]}
  */
-export const HANDLERS = [startFeature, closeParent];
+export const HANDLERS = [startFeature, closeParent, requestReview];
 
 /**
  * イベントから、ハンドラーを探すためのキーを作る。

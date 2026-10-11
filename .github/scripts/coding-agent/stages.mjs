@@ -103,6 +103,37 @@ export function getFeatureStage(stage) {
 }
 
 /**
+ * 段階の PR のレビューで、参考資料として渡す前の段階の成果物を返す。
+ * 作成の担当に渡す資料と同じにする。実装タスクは、実装計画に渡した資料を参考資料にする。
+ *
+ * @param {string} stage 段階の識別子
+ * @param {string} featureDir 機能ごとのディレクトリ
+ * @returns {{ name: string, path: string }[]}
+ */
+export function reviewDocuments(stage, featureDir) {
+  const definition = getFeatureStage(stage === IMPLEMENTATION_STAGE ? 'planning' : stage);
+  return definition.inputs.map((input) => {
+    const source = getFeatureStage(input);
+    return { name: source.name, path: `${featureDir}/${source.artifact}` };
+  });
+}
+
+/**
+ * 段階の成果物のパスを返す。成果物がファイルでない段階 (実装計画と実装タスク) は null を返す。
+ *
+ * @param {string} stage 段階の識別子
+ * @param {string} featureDir 機能ごとのディレクトリ
+ * @returns {string | null}
+ */
+export function artifactPath(stage, featureDir) {
+  if (stage === IMPLEMENTATION_STAGE) {
+    return null;
+  }
+  const { artifact } = getFeatureStage(stage);
+  return artifact === null ? null : `${featureDir}/${artifact}`;
+}
+
+/**
  * 段階の Issue の本文を作る。
  *
  * @param {object} args
