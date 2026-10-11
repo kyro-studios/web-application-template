@@ -119,7 +119,7 @@ flowchart LR
 
 - GitHub App はエージェントごとに用意し、`agents.json` に登録する
 - エージェントとは別に、進行役 (coordinator) の GitHub App を 1 つ用意し、`agents.json` の `coordinator` に登録する
-  - 振り分け用のワークフローの書き込み (段階の Issue の作成、ラベル付け、Assign、親 Issue の Close、実装タスクの Issue の作成) に使う。必要な権限は Issues の読み書きと、PR と Contents の読み取り (レビューの依頼で、PR の変更されたファイルやレビューを読むため)
+  - 振り分け用のワークフローの書き込み (段階の Issue の作成、ラベル付け、Assign、親 Issue の Close、実装タスクの Issue の作成) に使う。必要な権限は Issues と Pull requests の読み書きと、Contents の読み取り。PR の変更されたファイルやレビューを読むほか、PR へのコメント、ラベル付け、Assign (修正の依頼や人への引き継ぎ) に Pull requests の書き込み権限が要る
   - 「自分たちの GitHub App が作った Issue」は、進行役の App の Bot が作った Issue を指す。エージェントの App を使い回さないのは、エージェントを差し替えても、段階の Issue を見分ける基準が変わらないようにするため
   - 進行役の App のトークンを使うのは、振り分け用のワークフローの決まった処理だけで、LLM には渡さない
   - 振り分け用のワークフローは、まず読み取り専用の GITHUB_TOKEN で処理するイベントか判定し、処理するときだけ進行役の App のトークンを発行する

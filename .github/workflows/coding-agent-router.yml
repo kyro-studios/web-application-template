@@ -70,7 +70,8 @@ jobs:
           # Organization か利用するリポジトリの Secrets に登録した、進行役の App の秘密鍵
           private-key: ${{ secrets.CODING_AGENT_COORDINATOR_PRIVATE_KEY }}
           permission-issues: write
-          permission-pull-requests: read
+          # PR へのコメント、ラベル付け、Assign (修正の依頼や人への引き継ぎ) に使う
+          permission-pull-requests: write
           permission-contents: read
 
       - name: 振り分ける
