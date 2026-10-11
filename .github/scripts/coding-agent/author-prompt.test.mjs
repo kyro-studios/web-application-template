@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readdir } from 'node:fs/promises';
 import { describe, it } from 'node:test';
-import { buildCreatePrompt, buildFixPrompt } from './author-prompt.mjs';
+import { buildCreatePrompt, buildFixPrompt, promptFiles } from './author-prompt.mjs';
 import { CREATABLE_STAGES } from './handlers/launch-stage.mjs';
 
 const materials = {
@@ -16,33 +16,56 @@ const materials = {
 const baseRequest = {
   id: 'create-issue-3',
   agent: 'claude',
-  stage: /** @type {const} */ ('specification'),
+  stage: /** @type {import('./agent-request.mjs').AgentStage} */ ('specification'),
   issueNumber: 3,
   targetSha: '0123456789abcdef0123456789abcdef01234567',
 };
 
 describe('buildCreatePrompt', () => {
-  it('共通の指示、段階ごとの指示、依頼の内容をつなげる', () => {
+  it('指示のファイルの本文と、依頼の内容をつなげる', () => {
     const prompt = buildCreatePrompt({
-      common: '共通の指示\n',
-      stagePrompt: '仕様書の指示\n',
+      prompts: ['共通の指示\n', '文書の指示\n', '仕様書の指示\n'],
       request: { ...baseRequest, mode: 'create', pullRequestNumber: null, materials },
     });
 
-    assert.match(prompt, /^共通の指示\n\n仕様書の指示\n\n## 依頼の内容/);
+    assert.match(prompt, /^共通の指示\n\n文書の指示\n\n仕様書の指示\n\n## 依頼の内容/);
     assert.match(prompt, /- 作成する成果物: `docs\/features\/1-login\/specification\.md`/);
     assert.match(prompt, /  - 要件定義: `docs\/features\/1-login\/requirements\.md`/);
     assert.match(prompt, /- 変更してよいファイル: `docs\/features\/1-login\/specification\.md`/);
     assert.doesNotMatch(prompt, /変更してはいけないファイル/);
     assert.match(prompt, /### 機能の親 Issue の本文\n\n~~~~text\n```\nログインする\n```\n~~~~/);
   });
+
+  it('実装計画では、変更してよいファイルの代わりに、担当に選べるエージェントと上限を書く', () => {
+    const prompt = buildCreatePrompt({
+      prompts: ['共通の指示', '計画の指示'],
+      request: {
+        ...baseRequest,
+        mode: 'create',
+        stage: 'planning',
+        pullRequestNumber: null,
+        materials: {
+          ...materials,
+          artifact: null,
+          allowedFiles: null,
+          implementers: [{ id: 'claude', name: 'Claude Code' }],
+          planLimits: { maxTasks: 30, maxDepth: 6 },
+        },
+      },
+    });
+
+    assert.doesNotMatch(prompt, /変更してよいファイル/);
+    assert.doesNotMatch(prompt, /作成する成果物/);
+    assert.match(prompt, /- 実装タスクの担当に選べるエージェント: `claude` \(Claude Code\)/);
+    assert.match(prompt, /- タスクの数の上限: 30 件/);
+    assert.match(prompt, /- 親子関係の深さの上限: 6 階層/);
+  });
 });
 
 describe('buildFixPrompt', () => {
   it('修正の指示に、レビューの所見と行への指摘、修正の回数を含める', () => {
     const prompt = buildFixPrompt({
-      common: '修正の指示\n',
-      stagePrompt: '仕様書の指示\n',
+      prompts: ['修正の指示\n', '仕様書の指示\n'],
       request: {
         ...baseRequest,
         id: 'fix-pr-8-0123456',
@@ -67,13 +90,24 @@ describe('buildFixPrompt', () => {
   });
 });
 
-describe('作成担当への指示のファイル', () => {
-  it('起動できる段階ごとの作成の指示と、作成と修正に共通する指示がある', async () => {
-    const createFiles = await readdir(new URL('../../coding-agent/prompts/create/', import.meta.url));
-    for (const stage of ['common', ...CREATABLE_STAGES]) {
-      assert.ok(createFiles.includes(`${stage}.md`), stage);
+describe('promptFiles', () => {
+  it('依頼の種類と段階の種類ごとに、読み込む指示のファイルを決める', () => {
+    assert.deepEqual(promptFiles('create', 'specification'), ['create/common.md', 'create/documents.md', 'create/specification.md']);
+    assert.deepEqual(promptFiles('create', 'planning'), ['create/common.md', 'create/planning.md']);
+    assert.deepEqual(promptFiles('fix', 'architecture'), ['fix/common.md', 'create/architecture.md']);
+  });
+
+  it('起動できる段階で読み込む指示のファイルが、すべてある', async () => {
+    const promptsDir = new URL('../../coding-agent/prompts/', import.meta.url);
+    const files = new Set([
+      ...(await readdir(new URL('create/', promptsDir))).map((file) => `create/${file}`),
+      ...(await readdir(new URL('fix/', promptsDir))).map((file) => `fix/${file}`),
+    ]);
+    for (const stage of CREATABLE_STAGES) {
+      for (const file of promptFiles('create', stage)) {
+        assert.ok(files.has(file), file);
+      }
     }
-    const fixFiles = await readdir(new URL('../../coding-agent/prompts/fix/', import.meta.url));
-    assert.ok(fixFiles.includes('common.md'));
+    assert.ok(files.has('fix/common.md'));
   });
 });
