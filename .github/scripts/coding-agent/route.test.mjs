@@ -2,12 +2,21 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, it } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { createRouter, eventKey } from './route.mjs';
 import { createFakeCore } from './testing/fake-github.mjs';
+import { createFixtureRoot } from './testing/fixture-config.mjs';
 
-const ROOT_DIR = fileURLToPath(new URL('../../../', import.meta.url));
+/** テスト用の設定ファイルを置いたディレクトリ (リポジトリの設定に左右されないようにする) */
+let ROOT_DIR = '';
+
+before(async () => {
+  ROOT_DIR = await createFixtureRoot();
+});
+
+after(async () => {
+  await rm(ROOT_DIR, { recursive: true, force: true });
+});
 const SHA = '0123456789abcdef0123456789abcdef01234567';
 
 /**
@@ -79,7 +88,7 @@ describe('match', () => {
     const core = await runStep(match, createContext('issues', 'closed'));
 
     assert.equal(core.outputs.handled, 'true');
-    assert.equal(core.outputs['coordinator-client-id'], 'your-coordinator-app-client-id');
+    assert.equal(core.outputs['coordinator-client-id'], 'coordinator-client-id');
   });
 
   it('処理するハンドラーが無ければ、何も出力しない', async () => {

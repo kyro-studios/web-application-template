@@ -1,19 +1,11 @@
 import assert from 'node:assert/strict';
-import { before, describe, it } from 'node:test';
-import { fileURLToPath } from 'node:url';
-import { loadConfig } from '../config.mjs';
+import { describe, it } from 'node:test';
 import { FEATURE_STAGES } from '../stages.mjs';
 import { createFakeCore, createFakeGitHub } from '../testing/fake-github.mjs';
+import { fixtureConfig } from '../testing/fixture-config.mjs';
 import { startFeature } from './start-feature.mjs';
 
-const ROOT_DIR = fileURLToPath(new URL('../../../../', import.meta.url));
-
-/** @type {import('../config.mjs').CodingAgentConfig} */
-let config;
-
-before(async () => {
-  config = await loadConfig(ROOT_DIR);
-});
+const config = fixtureConfig();
 
 /**
  * @param {string} featureName
@@ -29,7 +21,7 @@ function formBody(featureName) {
  * @param {string} [options.featureName]
  * @param {Record<string, string>} [options.permissions]
  */
-function setup({ featureName = 'user-login', permissions = { alice: 'write', 'your-claude-account': 'write' } } = {}) {
+function setup({ featureName = 'user-login', permissions = { alice: 'write', 'claude-account': 'write' } } = {}) {
   const fake = createFakeGitHub({ actor: config.agents.coordinator.bot, permissions });
   const feature = fake.addIssue({ title: 'ログイン機能', body: formBody(featureName), labels: ['feature'], user: 'alice' });
 
@@ -98,7 +90,7 @@ describe('startFeature.run', () => {
     );
     assert.deepEqual(
       stageIssues.map((issue) => issue.assignees.map((user) => user.login)),
-      [['alice'], ['your-claude-account'], ['your-claude-account'], ['your-claude-account'], ['your-claude-account']],
+      [['alice'], ['claude-account'], ['claude-account'], ['claude-account'], ['claude-account']],
     );
 
     assert.equal(fake.comments.length, 1);
@@ -163,6 +155,6 @@ describe('startFeature.run', () => {
     const { core } = await run('opened');
 
     assert.equal(core.warnings.length, FEATURE_STAGES.length - 1);
-    assert.match(core.warnings[0], /your-claude-account を Assign できませんでした/);
+    assert.match(core.warnings[0], /claude-account を Assign できませんでした/);
   });
 });

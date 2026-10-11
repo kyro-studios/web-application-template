@@ -1,18 +1,10 @@
 import assert from 'node:assert/strict';
-import { before, describe, it } from 'node:test';
-import { fileURLToPath } from 'node:url';
-import { loadConfig } from '../config.mjs';
+import { describe, it } from 'node:test';
 import { createFakeCore, createFakeGitHub } from '../testing/fake-github.mjs';
+import { fixtureConfig } from '../testing/fixture-config.mjs';
 import { closeParent } from './close-parent.mjs';
 
-const ROOT_DIR = fileURLToPath(new URL('../../../../', import.meta.url));
-
-/** @type {import('../config.mjs').CodingAgentConfig} */
-let config;
-
-before(async () => {
-  config = await loadConfig(ROOT_DIR);
-});
+const config = fixtureConfig();
 
 /**
  * @param {ReturnType<typeof createFakeGitHub>} fake

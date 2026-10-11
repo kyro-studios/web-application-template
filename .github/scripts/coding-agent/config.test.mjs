@@ -3,7 +3,7 @@ import { cp, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fixtureAgentsConfig, ROOT_DIR } from './testing/fixture-config.mjs';
 import {
   CONFIG_DIR,
   ConfigError,
@@ -18,42 +18,13 @@ import {
   validateAgentRelations,
 } from './config.mjs';
 
-const ROOT_DIR = fileURLToPath(new URL('../../../', import.meta.url));
-
-/**
- * @returns {import('./config.mjs').AgentsConfig}
- */
-function createAgentsConfig() {
-  /**
-   * @param {string} id
-   * @returns {import('./config.mjs').Agent}
-   */
-  const agent = (id) => ({
-    name: id,
-    assignee: `${id}-account`,
-    bot: `${id}-app[bot]`,
-    workflow: `coding-agent-${id}.yml`,
-    appClientId: `${id}-client-id`,
-  });
-  return {
-    coordinator: {
-      bot: 'coordinator-app[bot]',
-      appClientId: 'coordinator-client-id',
-    },
-    agents: { claude: agent('claude'), codex: agent('codex') },
-    roles: {
-      author: { specification: 'claude', 'domain-model': 'claude', architecture: 'claude', planning: 'claude' },
-      implementers: ['claude'],
-      reviewer: 'codex',
-    },
-  };
-}
+const createAgentsConfig = fixtureAgentsConfig;
 
 describe('loadConfig', () => {
   it('リポジトリの設定ファイルを読み込める', async () => {
+    // テンプレートから作ったリポジトリで書き換えた設定も、ここで検証される
     const config = await loadConfig(ROOT_DIR);
     assert.ok(Object.keys(config.agents.agents).length > 0);
-    assert.equal(config.stages.featureRoot, 'docs/features');
   });
 
   describe('設定に問題がある場合', () => {
