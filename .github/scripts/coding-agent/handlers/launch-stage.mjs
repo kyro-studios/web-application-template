@@ -14,13 +14,9 @@
  * 今は、文書の段階 (仕様書、概念モデル、アーキテクチャ設計) だけを起動する。実装計画と実装タスクは、後で対応する。
  */
 
-import { expandStageFiles, featureDirectory, findAgentByAssignee, findAgentByBot, getAgent, isCoordinator, isValidFeatureName } from '../config.mjs';
-import {
-  findLabeledAncestor,
-  findUnresolvedDependencies,
-  findWaitingIssueNumbers,
-  hasWritePermission,
-} from '../github-issues.mjs';
+import { isTrustedActor } from '../actors.mjs';
+import { expandStageFiles, featureDirectory, findAgentByAssignee, getAgent, isCoordinator, isValidFeatureName } from '../config.mjs';
+import { findLabeledAncestor, findUnresolvedDependencies, findWaitingIssueNumbers } from '../github-issues.mjs';
 import { FEATURE_NAME_FIELD, parseIssueForm } from '../issue-form.mjs';
 import { artifactPath, FEATURE_LABEL, getFeatureStage, reviewDocuments, stageOf } from '../stages.mjs';
 
@@ -36,24 +32,6 @@ export const CREATABLE_STAGES = /** @type {const} */ (['specification', 'domain-
 
 /** 起動済みの印として、Issue のコメントに埋め込む文字列 */
 export const LAUNCH_MARKER = '<!-- coding-agent-launch -->';
-
-/** Issue ごとに振り分けをやり直すときに、手動実行するアカウント */
-const ACTIONS_BOT = 'github-actions[bot]';
-
-/**
- * イベントを起こしたアカウントを信頼できるか判定する。書き込み権限の無いユーザーの操作で、エージェントを動かさないため。
- * 進行役とエージェントの App (マージによる Close など) と、振り分けをやり直す GitHub Actions は信頼する。
- *
- * @param {HandlerArgs} args
- * @returns {Promise<boolean>}
- */
-async function isTrustedActor({ github, context, config }) {
-  const actor = context.actor;
-  if (isCoordinator(config.agents, actor) || findAgentByBot(config.agents, actor) !== undefined || actor === ACTIONS_BOT) {
-    return true;
-  }
-  return hasWritePermission(github, context.repo, actor);
-}
 
 /**
  * 段階の Issue を起動できるか確かめる。
@@ -138,7 +116,10 @@ export const launchStage = {
     }
 
     const { data } = await github.rest.issues.get({ ...repository, issue_number: issueNumber });
-    const issue = /** @type {RestIssue & { body?: string | null }} */ (data);
+    const issue = /** @type {RestIssue & { body?: string | null, pull_request?: object }} */ (data);
+    if (issue.pull_request !== undefined) {
+      return {};
+    }
     const result = await checkLaunchable(args, issue);
     if ('reason' in result) {
       core.info(`#${issueNumber} は起動しません: ${result.reason}`);
