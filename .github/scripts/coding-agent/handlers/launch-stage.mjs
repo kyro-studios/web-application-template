@@ -11,12 +11,14 @@
  * - 進行役の App が作った、Open の段階の Issue で、その段階の作成担当が Assign されている
  * - すべての依存先 (Sub Issue と Blocked by の Issue) が Close され、紐づく PR に Open のまま残っているものが無い
  *
- * 今は、文書の段階 (仕様書、概念モデル、アーキテクチャ設計) だけを起動する。実装計画と実装タスクは、後で対応する。
+ * 今は、文書の段階 (仕様書、概念モデル、アーキテクチャ設計) と実装計画を起動する。実装タスクは、後で対応する。
  */
 
 import { isTrustedActor } from '../actors.mjs';
 import { expandStageFiles, featureDirectory, findAgentByAssignee, getAgent, isCoordinator, isValidFeatureName } from '../config.mjs';
-import { findLabeledAncestor, findUnresolvedDependencies, findWaitingIssueNumbers } from '../github-issues.mjs';
+import { maxPlanTasks } from '../create-tasks.mjs';
+import { findLabeledAncestor, findUnresolvedDependencies, findWaitingIssueNumbers, measureIssueDepth } from '../github-issues.mjs';
+import { MAX_SUB_ISSUE_LEVELS } from '../plan-validation.mjs';
 import { FEATURE_NAME_FIELD, parseIssueForm } from '../issue-form.mjs';
 import { artifactPath, FEATURE_LABEL, getFeatureStage, reviewDocuments, stageOf } from '../stages.mjs';
 
@@ -28,7 +30,7 @@ import { artifactPath, FEATURE_LABEL, getFeatureStage, reviewDocuments, stageOf 
  */
 
 /** 作成担当が成果物を作る段階 (今対応しているもの) */
-export const CREATABLE_STAGES = /** @type {const} */ (['specification', 'domain-model', 'architecture']);
+export const CREATABLE_STAGES = /** @type {const} */ (['specification', 'domain-model', 'architecture', 'planning']);
 
 /** 起動済みの印として、Issue のコメントに埋め込む文字列 */
 export const LAUNCH_MARKER = '<!-- coding-agent-launch -->';
@@ -172,7 +174,17 @@ export const launchStage = {
             featureDir,
             artifact: artifactPath(stage, featureDir),
             documents: reviewDocuments(stage, featureDir),
-            allowedFiles: expandStageFiles(config.stages, stage, featureDir),
+            ...(stage === 'planning'
+              ? {
+                  // 実装計画はファイルを変更せず、計画から実装タスクの Issue を作る
+                  allowedFiles: null,
+                  implementers: config.agents.roles.implementers.map((id) => ({ id, name: getAgent(config.agents, id).name })),
+                  planLimits: {
+                    maxTasks: maxPlanTasks(process.env.PLANNER_MAX_TASKS),
+                    maxDepth: MAX_SUB_ISSUE_LEVELS - (await measureIssueDepth(github, repository, issueNumber)),
+                  },
+                }
+              : { allowedFiles: expandStageFiles(config.stages, stage, featureDir) }),
           },
         },
       ],

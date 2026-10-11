@@ -1,0 +1,74 @@
+name: Coding Agent Tasks
+
+# 実装計画の作成担当のワークフローから呼び出す、共通の Issue の作成ジョブ。
+# 作成担当が出力した計画を検証し、進行役の GitHub App で実装タスクの Issue を作成する (仕様の 10.1)。
+# 進行役の App で作るのは、実装タスクも段階の Issue として見分けられるようにするため。
+on:
+  workflow_call:
+    inputs:
+      planning-issue-number:
+        description: 実装計画の Issue の番号
+        type: string
+        required: true
+      artifact-name:
+        description: 計画 (plan.json) を含む Artifact の名前
+        type: string
+        required: true
+    secrets:
+      coordinator-private-key:
+        description: 進行役の GitHub App の秘密鍵
+        required: true
+
+permissions: {}
+
+jobs:
+  create-tasks:
+    name: 実装タスクの Issue の作成
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github
+          persist-credentials: false
+
+      # postinstall の husky の初期化を動かさないよう、スクリプトを実行せずにインストールする
+      - name: 依存パッケージをインストールする
+        run: npm ci --ignore-scripts
+
+      - name: 進行役の App の設定を読み込む
+        id: config
+        run: echo "client-id=$(jq -r '.coordinator.appClientId' .github/coding-agent/agents.json)" >> "$GITHUB_OUTPUT"
+
+      - name: 進行役の App のトークンを発行する
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ steps.config.outputs.client-id }}
+          private-key: ${{ secrets.coordinator-private-key }}
+          permission-issues: write
+
+      - name: 計画を取得する
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ runner.temp }}/coding-agent-plan
+
+      - name: 計画を検証して実装タスクの Issue を作成する
+        uses: actions/github-script@v9
+        env:
+          PLAN_PATH: ${{ runner.temp }}/coding-agent-plan/plan.json
+          PLANNING_ISSUE_NUMBER: ${{ inputs.planning-issue-number }}
+          # 作成済みの Issue を見分ける印に使う。失敗したジョブを再実行すれば、続きから作成する
+          PLAN_RUN_ID: ${{ github.run_id }}
+          MAX_TASKS: ${{ vars.PLANNER_MAX_TASKS }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { default: createTasks } = await import(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/coding-agent/create-tasks.mjs`
+            );
+            await createTasks({ github, context, core });

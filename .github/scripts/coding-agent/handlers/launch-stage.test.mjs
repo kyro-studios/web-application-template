@@ -161,13 +161,32 @@ describe('launchStage.run', () => {
   });
 
   it('依存先が解決していない段階や、まだ対応していない段階は起動しない', async () => {
-    const { fake, specification, planning, architecture } = setup();
+    const { fake, specification, planning } = setup();
     assert.deepEqual((await run(fake, dispatchContext(specification.number), launchStage)).result, {});
 
-    // 実装計画の起動には、まだ対応していない
-    close(fake, architecture.number);
-    assert.deepEqual((await run(fake, dispatchContext(planning.number), launchStage)).result, {});
+    // 実装タスクの起動には、まだ対応していない
+    const task = fake.addIssue({ labels: ['stage:implementation'], parent: planning.number, assignees: ['claude-account'] });
+    assert.deepEqual((await run(fake, dispatchContext(task.number), launchStage)).result, {});
     assert.equal(fake.comments.length, 0);
+  });
+
+  it('実装計画では、担当に選べるエージェントとタスクの上限を依頼に含め、変更してよいファイルは含めない', async () => {
+    const { fake, architecture, planning } = setup();
+    close(fake, architecture.number);
+
+    const { result } = await run(fake, dispatchContext(planning.number), launchStage);
+
+    const request = result.requests?.[0];
+    assert.equal(request?.stage, 'planning');
+    assert.equal(request?.materials.artifact, null);
+    assert.equal(request?.materials.allowedFiles, null);
+    assert.deepEqual(request?.materials.implementers, [{ id: 'claude', name: 'claude' }]);
+    // 実装計画の Issue は 2 階層目なので、その下に 6 階層まで置ける
+    assert.deepEqual(request?.materials.planLimits, { maxTasks: 30, maxDepth: 6 });
+    assert.deepEqual(
+      request?.materials.documents.map((/** @type {{ path: string }} */ document) => document.path),
+      ['docs/features/1-user-login/specification.md', 'docs/features/1-user-login/domain-model.md', 'docs/features/1-user-login/architecture.md'],
+    );
   });
 
   it('作成担当が Assign されていない Issue や、進行役の App が作っていない Issue は起動しない', async () => {

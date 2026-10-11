@@ -1,5 +1,5 @@
 /**
- * 計画役のエージェントが出力した計画 (JSON) を検証する。
+ * 実装計画の作成担当が出力した計画 (JSON) を検証する。
  * 計画は信頼できない入力として扱い、Issue を 1 件も作成する前にすべての項目を確認する。
  */
 
@@ -9,7 +9,7 @@
  * @property {string} title Issue のタイトル
  * @property {string} body Issue の本文
  * @property {string | null} agent 担当エージェントの識別子 (人が対応するタスクなら null)
- * @property {string | null} parent 親タスクの key (設計 Issue の直下なら null)
+ * @property {string | null} parent 親タスクの key (実装計画の Issue の直下なら null)
  * @property {string[]} blocked_by 先に完了している必要があるタスクの key
  */
 
@@ -23,7 +23,8 @@
  * @typedef {object} ValidationOptions
  * @property {ReadonlySet<string>} agents 利用できるエージェントの識別子
  * @property {number} maxTasks 1 回の計画で作成できるタスクの上限
- * @property {number} rootCapacity 設計 Issue の直下に追加できる Sub Issue の数
+ * @property {number} maxDepth 実装計画の Issue の直下を 1 階層目とした、親子関係の深さの上限
+ * @property {number} rootCapacity 実装計画の Issue の直下に追加できる Sub Issue の数
  */
 
 export const TASK_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{0,49}$/;
@@ -34,8 +35,11 @@ export const MAX_TITLE_LENGTH = 256;
 /** GitHub の Issue の本文の上限 (65536 文字) から、ワークフローが追記する分を差し引いた長さ */
 export const MAX_BODY_LENGTH = 60000;
 
-/** 設計 Issue の直下を 1 階層目とした、親子関係の深さの上限 */
-export const MAX_DEPTH = 4;
+/** GitHub で入れ子にできる Sub Issue の階層の上限 */
+export const MAX_SUB_ISSUE_LEVELS = 8;
+
+/** 仕組みが Issue やコメントに埋め込む印の書き出し。計画の本文には含めさせない */
+const MARKER_PREFIX = '<!-- coding-agent';
 
 /** GitHub で 1 つの Issue に紐づけられる Sub Issue の上限 */
 export const MAX_SUB_ISSUES = 100;
@@ -82,7 +86,7 @@ export function validatePlan(input, options) {
   }
 
   return [
-    ...validateHierarchy(tasks, options.rootCapacity),
+    ...validateHierarchy(tasks, options.maxDepth, options.rootCapacity),
     ...findDeadlocks(tasks),
   ];
 }
@@ -132,6 +136,9 @@ function validateTaskFields(task, index, agents) {
     errors.push(`${label}.body を入力してください`);
   } else if (task.body.length > MAX_BODY_LENGTH) {
     errors.push(`${label}.body が長すぎます (${task.body.length} 文字、上限は ${MAX_BODY_LENGTH} 文字)`);
+  } else if (task.body.includes(MARKER_PREFIX)) {
+    // 仕組みの印を偽造して、作成済みの Issue と取り違えさせないようにする
+    errors.push(`${label}.body に、仕組みの印 (${MARKER_PREFIX}) を含めることはできません`);
   }
 
   if (task.agent !== null && (typeof task.agent !== 'string' || !agents.has(task.agent))) {
@@ -201,10 +208,11 @@ function validateReferences(tasks) {
  * 親子関係が木構造になっているか、深さと子の数が上限を超えていないか確認する。
  *
  * @param {PlanTask[]} tasks
- * @param {number} rootCapacity 設計 Issue の直下に追加できる Sub Issue の数
+ * @param {number} maxDepth 親子関係の深さの上限
+ * @param {number} rootCapacity 実装計画の Issue の直下に追加できる Sub Issue の数
  * @returns {string[]}
  */
-function validateHierarchy(tasks, rootCapacity) {
+function validateHierarchy(tasks, maxDepth, rootCapacity) {
   const byKey = new Map(tasks.map((task) => [task.key, task]));
   /** @type {string[]} */
   const errors = [];
@@ -213,14 +221,14 @@ function validateHierarchy(tasks, rootCapacity) {
     const depth = measureDepth(task, byKey);
     if (depth === undefined) {
       errors.push(`"${task.key}" の親子関係が循環しています`);
-    } else if (depth > MAX_DEPTH) {
-      errors.push(`"${task.key}" の親子関係が深すぎます (${depth} 階層、上限は ${MAX_DEPTH} 階層)`);
+    } else if (depth > maxDepth) {
+      errors.push(`"${task.key}" の親子関係が深すぎます (${depth} 階層、上限は ${maxDepth} 階層)`);
     }
   }
 
   const roots = tasks.filter((task) => task.parent === null).length;
   if (roots > rootCapacity) {
-    errors.push(`設計 Issue の直下に置くタスクが多すぎます (${roots} 件、追加できるのは ${rootCapacity} 件)`);
+    errors.push(`実装計画の Issue の直下に置くタスクが多すぎます (${roots} 件、追加できるのは ${rootCapacity} 件)`);
   }
 
   for (const [parent, children] of groupChildren(tasks)) {
@@ -233,7 +241,7 @@ function validateHierarchy(tasks, rootCapacity) {
 }
 
 /**
- * 設計 Issue の直下を 1 として、タスクの深さを返す。
+ * 実装計画の Issue の直下を 1 として、タスクの深さを返す。
  *
  * @param {PlanTask} task
  * @param {ReadonlyMap<string, PlanTask>} byKey

@@ -57,6 +57,7 @@ jobs:
       actions: read
     outputs:
       agent: ${{ steps.request.outputs.agent }}
+      kind: ${{ steps.request.outputs.kind }}
     steps:
       - name: 作業を始めるコミットをチェックアウトする
         uses: actions/checkout@v7
@@ -106,7 +107,16 @@ jobs:
           model="$(jq -r --arg agent "$agent" '.agents[$agent].model // ""' "$TRUSTED/.github/coding-agent/agents.json")"
           echo "agent=$agent" >> "$GITHUB_OUTPUT"
           echo "model-args=$([ -n "$model" ] && printf -- '--model %s' "$model")" >> "$GITHUB_OUTPUT"
-          echo "result-schema=$(jq -c . "$TRUSTED/.github/coding-agent/result-schema.json")" >> "$GITHUB_OUTPUT"
+          # 実装計画は、ファイルを変更せずに計画を出力する。それ以外は、ファイルを変更してコミットメッセージなどを出力する
+          if [ "$(jq -r '.stage' "$request")" = 'planning' ]; then
+            echo "kind=planning" >> "$GITHUB_OUTPUT"
+            echo "tools=Read,Glob,Grep" >> "$GITHUB_OUTPUT"
+            echo "output-schema=$(jq -c . "$TRUSTED/.github/coding-agent/plan-schema.json")" >> "$GITHUB_OUTPUT"
+          else
+            echo "kind=change" >> "$GITHUB_OUTPUT"
+            echo "tools=Read,Edit,Write,Glob,Grep" >> "$GITHUB_OUTPUT"
+            echo "output-schema=$(jq -c . "$TRUSTED/.github/coding-agent/result-schema.json")" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: 作業の指示を作る
         id: prompt
@@ -135,14 +145,38 @@ jobs:
           github_token: ${{ github.token }}
           # 振り分け用のワークフロー (github-actions[bot]) からの手動実行を許可する
           allowed_bots: github-actions
-          # 文書の段階では、ファイルを読み書きするだけで、コマンドは実行しない
+          # 文書の段階ではファイルを読み書きするだけ、実装計画では読むだけで、コマンドは実行しない
           claude_args: >-
-            --allowedTools "Read,Edit,Write,Glob,Grep"
-            --json-schema '${{ steps.request.outputs.result-schema }}'
+            --allowedTools "${{ steps.request.outputs.tools }}"
+            --json-schema '${{ steps.request.outputs.output-schema }}'
             ${{ steps.request.outputs.model-args }}
           prompt: ${{ steps.prompt.outputs.prompt }}
 
+      - name: 計画をまとめる
+        if: steps.request.outputs.kind == 'planning'
+        env:
+          STRUCTURED_OUTPUT: ${{ steps.claude.outputs.structured_output }}
+          PLAN_DIR: ${{ runner.temp }}/coding-agent-plan
+        run: |
+          set -euo pipefail
+          if [ -z "$STRUCTURED_OUTPUT" ]; then
+            echo "::error::作成担当が計画を出力しませんでした"
+            exit 1
+          fi
+          mkdir -p "$PLAN_DIR"
+          printf '%s' "$STRUCTURED_OUTPUT" > "$PLAN_DIR/plan.json"
+          jq . "$PLAN_DIR/plan.json"
+
+      - name: 計画を保存する
+        if: steps.request.outputs.kind == 'planning'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coding-agent-plan
+          path: ${{ runner.temp }}/coding-agent-plan
+          retention-days: 30
+
       - name: 変更内容をまとめる
+        if: steps.request.outputs.kind == 'change'
         env:
           TARGET_SHA: ${{ inputs.target-sha }}
           STRUCTURED_OUTPUT: ${{ steps.claude.outputs.structured_output }}
@@ -156,7 +190,9 @@ jobs:
           git diff --cached --binary "$TARGET_SHA" > "$RESULT_DIR/changes.patch"
           git diff --cached --stat "$TARGET_SHA"
 
-      - uses: actions/upload-artifact@v7
+      - name: 変更内容を保存する
+        if: steps.request.outputs.kind == 'change'
+        uses: actions/upload-artifact@v7
         with:
           name: coding-agent-result
           path: ${{ runner.temp }}/coding-agent-result
@@ -164,6 +200,7 @@ jobs:
 
   publish:
     needs: work
+    if: needs.work.outputs.kind == 'change'
     uses: ./.github/workflows/coding-agent-publish.yml
     permissions:
       contents: read
@@ -177,3 +214,17 @@ jobs:
     secrets:
       # Organization か利用するリポジトリの Secrets に登録した、Claude 用の App の秘密鍵
       app-private-key: ${{ secrets.CODING_AGENT_CLAUDE_PRIVATE_KEY }}
+
+  # 実装計画では、計画から進行役の App で実装タスクの Issue を作る
+  tasks:
+    needs: work
+    if: needs.work.outputs.kind == 'planning'
+    uses: ./.github/workflows/coding-agent-tasks.yml
+    permissions:
+      contents: read
+    with:
+      planning-issue-number: ${{ inputs.issue-number }}
+      artifact-name: coding-agent-plan
+    secrets:
+      # Organization か利用するリポジトリの Secrets に登録した、進行役の App の秘密鍵
+      coordinator-private-key: ${{ secrets.CODING_AGENT_COORDINATOR_PRIVATE_KEY }}
