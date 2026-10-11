@@ -1,0 +1,39 @@
+{
+  "type": "object",
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "レビュー全体の所見 (Markdown)。前回の指摘がある場合は、それが解消されたかも書く"
+    },
+    "findings": {
+      "type": "array",
+      "description": "指摘の一覧。指摘が無ければ空の配列にする",
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": ["must", "should", "nit"],
+            "description": "must: 誤り、矛盾、漏れなど、直さないと次の段階に進めない指摘 / should: 改善の提案 / nit: 細かな表現など"
+          },
+          "path": {
+            "type": ["string", "null"],
+            "description": "指摘するファイルのリポジトリのルートからの相対パス。ファイルに紐づかない指摘では null"
+          },
+          "line": {
+            "type": ["integer", "null"],
+            "description": "指摘する行の番号 (変更後のファイルの行)。行に紐づかない指摘では null"
+          },
+          "body": {
+            "type": "string",
+            "description": "指摘の内容 (Markdown)。何が問題で、どう直すべきかを書く"
+          }
+        },
+        "required": ["severity", "path", "line", "body"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["summary", "findings"],
+  "additionalProperties": false
+}
