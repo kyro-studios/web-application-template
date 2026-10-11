@@ -42,8 +42,7 @@
 {
   "coordinator": {
     "bot": "example-coordinator-app[bot]",
-    "appClientId": "Iv23li...",
-    "appPrivateKeyRef": "op://CI/Coordinator App/private key"
+    "appClientId": "Iv23li..."
   },
   "agents": {
     "claude": {
@@ -51,9 +50,7 @@
       "assignee": "example-claude",
       "bot": "example-claude-app[bot]",
       "workflow": "coding-agent-claude.yml",
-      "appClientId": "Iv23li...",
-      "appPrivateKeyRef": "op://CI/Claude App/private key",
-      "apiKeyRef": "op://CI/Anthropic/credential"
+      "appClientId": "Iv23li..."
     },
     "codex": { "...": "..." }
   },
@@ -72,17 +69,16 @@
 
 | 項目 | 内容 |
 | --- | --- |
-| `coordinator` | 進行役の GitHub App の Bot 名、Client ID、秘密鍵の 1Password の参照 (2.3) |
+| `coordinator` | 進行役の GitHub App の Bot 名と Client ID (2.3) |
 | `assignee` | Issue に Assign するアカウント。GitHub App の Bot は Assignee にできないため、マシンユーザーを使う |
 | `bot` | GitHub App の Bot 名 |
 | `workflow` | そのエージェントを動かすワークフローのファイル名 |
-| `appClientId` / `appPrivateKeyRef` | GitHub App の Client ID と、秘密鍵の 1Password の参照 |
-| `apiKeyRef` | エージェントの API キーの 1Password の参照 |
+| `appClientId` | GitHub App の Client ID |
 | `roles.author` | 段階ごとの作成担当 |
 | `roles.implementers` | 実装計画で実装タスクに割り当ててよいエージェント |
 | `roles.reviewer` | レビュー担当 |
 
-- このファイルには秘密の値を書かない。秘密の値は、Secrets の `OP_SERVICE_ACCOUNT_TOKEN` だけにする
+- このファイルには秘密の値を書かない。GitHub App の秘密鍵や API キーは Secrets に置く (2.4)
 - 運用中に調整したい値 (修正の上限など) は Variables に置く
 - 段階の Issue をワークフローがまとめて作るため、起動に Assign は必須ではない。それでも、誰が担当しているかを Issue で分かるようにするため、マシンユーザーを Assign する。Organization では、マシンユーザーをメンバーかコラボレーターとして追加する
 
@@ -132,6 +128,21 @@ flowchart LR
   - そのため、`roles.reviewer` のエージェントは、`roles.author` と `roles.implementers` のどのエージェントとも別にする。`agents.json` の検証で確認する
 - エージェントには、読み取り専用のトークンだけを渡す。書き込みは、エージェントの出力を受け取った別のジョブが、GitHub App のトークンで行う
 - GITHUB_TOKEN で行った操作では次のワークフローが起動しないため、Issue の作成、Assign、push、PR の作成、レビュー、マージには GitHub App のトークンを使う
+
+### 2.4 秘密の値
+
+GitHub App の秘密鍵とエージェントの API キーは、GitHub の Secrets に置く。
+
+- Organization の Secrets に登録し、利用するリポジトリを選んで共有する。リポジトリが増えても、同じ値を何度も登録せずに済む
+  - 同じ名前の Secrets がリポジトリにもあれば、リポジトリのものが使われる。特定のリポジトリだけ別の値にしたいときは、リポジトリの Secrets に登録する
+- Secrets の名前は固定にし、ワークフローの中に直接書く。名前を設定ファイルから読んで実行時に選ぶ書き方 (`secrets[<式>]`) は、公式のドキュメントで確認できないため使わない
+- 進行役の App の秘密鍵は、振り分け用のワークフローが読む。エージェントの App の秘密鍵と API キーは、エージェントごとのワークフローが読み、共通の書き込みジョブには必要なものだけを渡す
+
+| 名前 | 内容 | 読むワークフロー |
+| --- | --- | --- |
+| `CODING_AGENT_COORDINATOR_PRIVATE_KEY` | 進行役の GitHub App の秘密鍵 | 振り分け用のワークフロー |
+| `CODING_AGENT_<エージェント>_PRIVATE_KEY` | エージェントの GitHub App の秘密鍵 (例: `CODING_AGENT_CLAUDE_PRIVATE_KEY`) | エージェントごとのワークフロー |
+| `ANTHROPIC_API_KEY`、`OPENAI_API_KEY` など | エージェントの API キー | エージェントごとのワークフロー |
 
 ## 3. 全体の流れ
 
@@ -553,7 +564,7 @@ docs/features/<機能の親 Issue の番号>-<機能名>/
 | `REVIEW_MAX_FIX_ROUNDS` | Variables | エージェントが修正する回数の上限 | 3 |
 | `PLANNER_MAX_TASKS` | Variables | 1 回の実装計画で作成できる実装タスクの上限 | 30 |
 
-設定ファイルは次のとおり。秘密の値は Secrets の `OP_SERVICE_ACCOUNT_TOKEN` だけに置く。
+設定ファイルは次のとおり。秘密の値は設定ファイルに書かず、Secrets に置く (2.4)。
 
 | ファイル | 内容 |
 | --- | --- |
@@ -591,7 +602,7 @@ node .github/scripts/coding-agent/setup-repository.mjs --repo <owner>/<name> [--
 
 - 次のものは、スクリプトの対象外とし、手順書で案内する
   - GitHub App の作成とインストール、マシンユーザーの用意 (2.1、2.3)
-  - 1Password のサービスアカウントと、Secrets の `OP_SERVICE_ACCOUNT_TOKEN`
+  - GitHub App の秘密鍵と API キーの、Organization の Secrets への登録と、利用するリポジトリへの共有 (2.4)
   - `agents.json` の編集と、Variables の設定 (13 章)
 
 ## 15. 既存の実装からの移行
@@ -611,7 +622,8 @@ node .github/scripts/coding-agent/setup-repository.mjs --repo <owner>/<name> [--
 
 Variables は、次のように整理する。
 
-- `*_ASSIGNEE`、`OP_*_REF`、`CODING_AGENT_APP_*` は `agents.json` に移す
+- `*_ASSIGNEE`、`CODING_AGENT_APP_*` は `agents.json` に移す
+- `OP_*_REF` と Secrets の `OP_SERVICE_ACCOUNT_TOKEN` (1Password) は使わなくなる。秘密の値は Secrets に直接置く (2.4)
 - `PLANNER_MODEL` は、エージェントごとの設定として `agents.json` に移す
 - `PLANNER_MAX_TASKS` は、運用中に調整したい値のため Variables に残す
 
