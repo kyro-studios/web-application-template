@@ -12,20 +12,16 @@
  * レビュー担当のワークフローは、範囲外のファイルがあればレビュー担当を呼ばずに差し戻す。
  */
 
-import { expandStageFiles, featureDirectory, findAgentByBot, getAgent, isCoordinator, isValidFeatureName } from '../config.mjs';
+import { findAgentByBot, getAgent } from '../config.mjs';
 import { findViolations } from '../changed-files.mjs';
-import { findLabeledAncestor, hasLabel, hasWritePermission } from '../github-issues.mjs';
-import { getClosingIssueNumbers, listChangedFiles, listReviewsBy } from '../github-pulls.mjs';
-import { FEATURE_NAME_FIELD, parseIssueForm } from '../issue-form.mjs';
-import { artifactPath, FEATURE_LABEL, reviewDocuments, stageOf } from '../stages.mjs';
+import { hasWritePermission } from '../github-issues.mjs';
+import { listChangedFiles, listReviewsBy } from '../github-pulls.mjs';
+import { NEEDS_HUMAN_LABEL, resolveStageContext, unhandledReason } from '../stage-context.mjs';
 
 /**
  * @typedef {import('../route.mjs').Handler} Handler
  * @typedef {import('../github-issues.mjs').RestIssue} RestIssue
  */
-
-/** 人の対応が必要なことを表すラベル。付いている間はレビューしない */
-export const NEEDS_HUMAN_LABEL = 'needs-human';
 
 /** レビューを依頼する PR のイベント */
 export const REVIEW_EVENTS = ['opened', 'reopened', 'ready_for_review', 'synchronize', 'unlabeled'].map(
@@ -41,17 +37,7 @@ export const requestReview = {
   events: REVIEW_EVENTS,
   matches: async ({ context }) => {
     const pullRequest = context.payload.pull_request;
-    if (pullRequest === undefined || pullRequest.state !== 'open' || pullRequest.draft) {
-      return false;
-    }
-    // フォークからの PR は対象にしない (Secrets を使うワークフローを、外部の変更に対して動かさないため)
-    if (pullRequest.head.repo?.full_name !== pullRequest.base.repo.full_name) {
-      return false;
-    }
-    if (pullRequest.base.ref !== context.payload.repository?.default_branch) {
-      return false;
-    }
-    if (hasLabel(pullRequest.labels ?? [], NEEDS_HUMAN_LABEL)) {
+    if (pullRequest === undefined || unhandledReason(pullRequest, context.payload.repository?.default_branch) !== undefined) {
       return false;
     }
     // ラベルが外されたときは、needs-human が外されたとき (人が解決したとき) だけレビューする
@@ -80,42 +66,22 @@ export const requestReview = {
     }
 
     // PR が Close する段階の Issue を確かめる
-    const closing = await getClosingIssueNumbers(github, repository, pullRequest.number);
-    if (closing.length === 0) {
-      core.info(`#${pullRequest.number} は Issue を Close しない PR のため、レビューしません`);
-      return {};
-    }
-    if (closing.length > 1) {
-      if (notify) {
+    const resolved = await resolveStageContext({ github, repository, config, pullRequestNumber: pullRequest.number });
+    if ('reason' in resolved) {
+      if (resolved.closing.length > 1 && notify) {
         await github.rest.issues.createComment({
           ...repository,
           issue_number: pullRequest.number,
-          body: `🤖 この PR は複数の Issue (${closing.map((number) => `#${number}`).join('、')}) を Close するため、レビューの対象にしていません。1 つの PR で Close する Issue は 1 つにしてください。`,
+          body: `🤖 この PR は複数の Issue (${resolved.closing.map((number) => `#${number}`).join('、')}) を Close するため、レビューの対象にしていません。1 つの PR で Close する Issue は 1 つにしてください。`,
         });
       }
-      core.notice(`#${pullRequest.number} は複数の Issue を Close するため、レビューしません`);
+      core.info(`#${pullRequest.number} はレビューしません: ${resolved.reason}`);
       return {};
     }
-    const { data } = await github.rest.issues.get({ ...repository, issue_number: closing[0] });
-    const issue = /** @type {RestIssue & { body?: string | null }} */ (data);
-    const stage = stageOf(issue.labels);
-    if (!isCoordinator(config.agents, issue.user?.login) || stage === undefined || stage === 'planning') {
-      core.info(`#${pullRequest.number} が Close する #${issue.number} は段階の Issue ではないため、レビューしません`);
-      return {};
-    }
-
-    // 機能ごとのディレクトリを、機能の親 Issue の機能名から決める
-    const feature = await findLabeledAncestor(github, repository, issue.number, FEATURE_LABEL);
-    const featureName = feature === undefined ? '' : (parseIssueForm(feature.body).get(FEATURE_NAME_FIELD) ?? '');
-    if (feature === undefined || !isValidFeatureName(featureName)) {
-      core.warning(`#${issue.number} の機能の親 Issue か、その機能名が見つからないため、レビューしません`);
-      return {};
-    }
-    const featureDir = featureDirectory(config.stages, feature.number, featureName);
-    const range = expandStageFiles(config.stages, /** @type {import('../config.mjs').ReviewedStage} */ (stage), featureDir);
+    const { issue, stage, feature, featureDir, artifact, documents, allowedFiles } = resolved.context;
 
     const files = await listChangedFiles(github, repository, pullRequest.number);
-    const violations = findViolations(files, range);
+    const violations = findViolations(files, allowedFiles);
     const previousReviews = await listReviewsBy(github, repository, pullRequest.number, reviewer.bot);
 
     /** @type {import('../agent-request.mjs').AgentRequest} */
@@ -123,7 +89,7 @@ export const requestReview = {
       id: `review-pr-${pullRequest.number}-${pullRequest.head.sha.slice(0, 7)}`,
       agent: reviewer.id,
       mode: 'review',
-      stage: /** @type {import('../agent-request.mjs').AgentStage} */ (stage),
+      stage,
       issueNumber: issue.number,
       pullRequestNumber: pullRequest.number,
       targetSha: pullRequest.head.sha,
@@ -139,9 +105,9 @@ export const requestReview = {
         issue: { number: issue.number, title: issue.title, body: issue.body ?? '' },
         feature: { number: feature.number, title: feature.title, body: feature.body ?? '' },
         featureDir,
-        artifact: artifactPath(stage, featureDir),
-        documents: reviewDocuments(stage, featureDir),
-        allowedFiles: range,
+        artifact,
+        documents,
+        allowedFiles,
         violations,
         previousReviews,
       },

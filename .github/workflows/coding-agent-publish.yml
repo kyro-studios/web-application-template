@@ -1,7 +1,8 @@
 name: Coding Agent Publish
 
 # エージェントのワークフローから呼び出す、共通の書き込みジョブ。
-# エージェントが作った変更を、そのエージェントの GitHub App のトークンで push し、PR を作成する。
+# エージェントが作った変更を、そのエージェントの GitHub App のトークンで push する。
+# 作成のときは新しいブランチに push して PR を作成し、修正のときは PR のブランチに push する。
 # エージェントには書き込み権限を持つトークンを渡さず、このジョブだけが書き込む (仕様の 2.3)。
 on:
   workflow_call:
@@ -11,13 +12,18 @@ on:
         type: string
         required: true
       mode:
-        description: 依頼の種類 (今は create だけに対応する)
+        description: 依頼の種類 (create か fix)
         type: string
         required: true
       issue-number:
         description: 対象の Issue の番号
         type: string
         required: true
+      pull-request-number:
+        description: 修正の対象の PR の番号 (作成のときは空)
+        type: string
+        required: false
+        default: ''
       target-sha:
         description: エージェントが作業を始めたコミット
         type: string
@@ -35,18 +41,18 @@ permissions: {}
 
 jobs:
   publish:
-    name: PR の作成
+    name: 変更の push
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
     steps:
       - name: 依頼の種類を確かめる
-        if: inputs.mode != 'create'
+        if: inputs.mode != 'create' && inputs.mode != 'fix'
         env:
           MODE: ${{ inputs.mode }}
         run: |
-          echo "::error::依頼の種類 $MODE には、まだ対応していません"
+          echo "::error::依頼の種類 $MODE には対応していません"
           exit 1
 
       - name: 既定ブランチの設定をチェックアウトする
@@ -93,6 +99,7 @@ jobs:
           path: ${{ runner.temp }}/coding-agent-result
 
       - name: コミットして PR を作成する
+        if: inputs.mode == 'create'
         working-directory: work
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -149,3 +156,61 @@ jobs:
             --head "$branch" \
             --title "$title" \
             --body-file "$body_file"
+
+      # 修正の差分は、修正を始めたコミット (PR の head) をもとにしているため、head が進んでいれば push しない
+      - name: PR のブランチに修正をコミットして push する
+        if: inputs.mode == 'fix'
+        working-directory: work
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          AGENT_NAME: ${{ steps.config.outputs.name }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull-request-number }}
+          TARGET_SHA: ${{ inputs.target-sha }}
+          RESULT_DIR: ${{ runner.temp }}/coding-agent-result
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          patch="$RESULT_DIR/changes.patch"
+          result="$RESULT_DIR/result.json"
+
+          read -r head_ref head_sha state < <(gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER" --jq '[.head.ref, .head.sha, .state] | @tsv')
+          if [ "$state" != 'open' ] || [ "$head_sha" != "$TARGET_SHA" ]; then
+            echo "::notice::#$PULL_REQUEST_NUMBER は修正を始めた後に更新されたか Close されたため、push しません"
+            exit 0
+          fi
+
+          if [ ! -s "$patch" ]; then
+            gh pr comment "$PULL_REQUEST_NUMBER" --body "🤖 ${AGENT_NAME} は修正を作成しませんでした。詳細は [ワークフロー]($RUN_URL) のログを確認してください。"
+            echo "::error::エージェントが修正を作成しませんでした"
+            exit 1
+          fi
+
+          commit_message="$(jq -r '.commit_message // empty' "$result" 2>/dev/null || true)"
+          summary="$(jq -r '.pull_request_body // empty' "$result" 2>/dev/null || true)"
+          if [ -z "$commit_message" ]; then
+            echo "::warning::エージェントがコミットメッセージを出力しなかったため、既定値を使います"
+            commit_message="fix: address review comments on #${PULL_REQUEST_NUMBER}"
+          fi
+
+          bot_login="${APP_SLUG}[bot]"
+          bot_id="$(gh api "/users/${bot_login}" --jq .id)"
+          git config user.name "$bot_login"
+          git config user.email "${bot_id}+${bot_login}@users.noreply.github.com"
+
+          git apply --index --binary "$patch"
+          git commit --file - <<< "$commit_message"
+          # 修正を始めたコミットからの fast-forward だけを許す (その間に push された変更を上書きしない)
+          git push origin "HEAD:refs/heads/${head_ref}"
+
+          # 修正の回数は、この印の付いたコメントで数える (仕様の 9.4)
+          body_file="$RUNNER_TEMP/fix-comment.md"
+          {
+            printf '🤖 %s がレビューの指摘を修正しました ([ワークフロー](%s))。\n\n' "$AGENT_NAME" "$RUN_URL"
+            if [ -n "$summary" ]; then
+              printf '%s\n\n' "$summary"
+            fi
+            printf '<!-- coding-agent-fix -->\n'
+          } > "$body_file"
+          gh pr comment "$PULL_REQUEST_NUMBER" --body-file "$body_file"
