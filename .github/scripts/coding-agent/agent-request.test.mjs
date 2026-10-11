@@ -29,10 +29,12 @@ describe('validateRequest', () => {
   it('正しい依頼では問題を報告しない', () => {
     assert.deepEqual(validateRequest(createRequest()), []);
     assert.deepEqual(validateRequest(createRequest({ mode: 'fix', pullRequestNumber: 34 })), []);
+    assert.deepEqual(validateRequest(createRequest({ mode: 'review', stage: 'requirements', pullRequestNumber: 34 })), []);
   });
 
-  it('修正の依頼には PR の番号が必要で、作成の依頼には指定できない', () => {
+  it('修正やレビューの依頼には PR の番号が必要で、作成の依頼には指定できない', () => {
     assert.match(validateRequest(createRequest({ mode: 'fix' })).join('\n'), /PR の番号が必要/);
+    assert.match(validateRequest(createRequest({ mode: 'review' })).join('\n'), /PR の番号が必要/);
     assert.match(validateRequest(createRequest({ pullRequestNumber: 34 })).join('\n'), /PR の番号は指定できません/);
   });
 
@@ -41,7 +43,7 @@ describe('validateRequest', () => {
       createRequest({
         id: '../issue',
         // @ts-expect-error 想定外の値を渡す
-        stage: 'requirements',
+        stage: 'design',
         issueNumber: 0,
         targetSha: 'main',
       }),

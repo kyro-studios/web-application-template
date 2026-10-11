@@ -10,11 +10,11 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /**
- * @typedef {'create' | 'fix'} RequestMode
+ * @typedef {'create' | 'fix' | 'review'} RequestMode
  */
 
 /**
- * @typedef {'specification' | 'domain-model' | 'architecture' | 'planning' | 'implementation'} AgentStage
+ * @typedef {'requirements' | 'specification' | 'domain-model' | 'architecture' | 'planning' | 'implementation'} AgentStage
  */
 
 /**
@@ -22,11 +22,11 @@ import { join } from 'node:path';
  * @typedef {object} AgentRequest
  * @property {string} id 依頼の識別子 (同じ実行の中で一意)
  * @property {string} agent 担当エージェントの識別子
- * @property {RequestMode} mode 作成 (create) か修正 (fix) か
+ * @property {RequestMode} mode 作成 (create)、修正 (fix)、レビュー (review) のどれか
  * @property {AgentStage} stage 段階
  * @property {number} issueNumber 対象の Issue の番号
- * @property {number | null} pullRequestNumber 修正の対象の PR の番号 (作成のときは null)
- * @property {string} targetSha 作業を始めるコミット
+ * @property {number | null} pullRequestNumber 修正やレビューの対象の PR の番号 (作成のときは null)
+ * @property {string} targetSha 作業を始めるコミット (レビューのときは、レビューする PR の head)
  * @property {Record<string, unknown>} materials エージェントに渡す資料
  */
 
@@ -46,10 +46,10 @@ export const REQUEST_ARTIFACT_NAME = 'coding-agent-requests';
 export const REQUEST_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 /** @type {ReadonlySet<string>} */
-const MODES = new Set(['create', 'fix']);
+const MODES = new Set(['create', 'fix', 'review']);
 
 /** @type {ReadonlySet<string>} */
-const STAGES = new Set(['specification', 'domain-model', 'architecture', 'planning', 'implementation']);
+const STAGES = new Set(['requirements', 'specification', 'domain-model', 'architecture', 'planning', 'implementation']);
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 
@@ -66,7 +66,7 @@ export function validateRequest(request) {
     errors.push(`依頼の識別子の形式が正しくありません: "${request.id}"`);
   }
   if (!MODES.has(request.mode)) {
-    errors.push(`mode は create か fix にしてください: "${request.mode}"`);
+    errors.push(`mode は create、fix、review のどれかにしてください: "${request.mode}"`);
   }
   if (!STAGES.has(request.stage)) {
     errors.push(`stage が正しくありません: "${request.stage}"`);
@@ -74,8 +74,8 @@ export function validateRequest(request) {
   if (!isPositiveInteger(request.issueNumber)) {
     errors.push(`Issue の番号が正しくありません: ${request.issueNumber}`);
   }
-  if (request.mode === 'fix' && !isPositiveInteger(request.pullRequestNumber)) {
-    errors.push(`修正の依頼には PR の番号が必要です: ${request.pullRequestNumber}`);
+  if ((request.mode === 'fix' || request.mode === 'review') && !isPositiveInteger(request.pullRequestNumber)) {
+    errors.push(`修正やレビューの依頼には PR の番号が必要です: ${request.pullRequestNumber}`);
   }
   if (request.mode === 'create' && request.pullRequestNumber !== null) {
     errors.push('作成の依頼に PR の番号は指定できません');
