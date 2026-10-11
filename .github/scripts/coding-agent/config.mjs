@@ -16,8 +16,6 @@ import Ajv2020 from 'ajv/dist/2020.js';
  * @property {string} bot GitHub App の Bot 名 (<slug>[bot])
  * @property {string} workflow エージェントを動かすワークフローのファイル名
  * @property {string} appClientId GitHub App の Client ID
- * @property {string} appPrivateKeyRef GitHub App の秘密鍵の 1Password の参照
- * @property {string} apiKeyRef エージェントの API キーの 1Password の参照
  * @property {string | null} [model] エージェントが使うモデル (null ならエージェントの既定)
  */
 
@@ -30,7 +28,6 @@ import Ajv2020 from 'ajv/dist/2020.js';
  * @typedef {object} Coordinator
  * @property {string} bot GitHub App の Bot 名 (<slug>[bot])
  * @property {string} appClientId GitHub App の Client ID
- * @property {string} appPrivateKeyRef GitHub App の秘密鍵の 1Password の参照
  */
 
 /**

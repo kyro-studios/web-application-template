@@ -56,23 +56,14 @@ jobs:
             );
             await match({ github, context, core });
 
-      - name: 1Password から進行役の App の秘密鍵を読み込む
-        id: op
-        if: steps.match.outputs.handled == 'true'
-        uses: 1password/load-secrets-action@v5
-        with:
-          export-env: false
-        env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          APP_PRIVATE_KEY: ${{ steps.match.outputs.coordinator-private-key-ref }}
-
       - name: 進行役の App のトークンを発行する
         id: app-token
         if: steps.match.outputs.handled == 'true'
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ steps.match.outputs.coordinator-client-id }}
-          private-key: ${{ steps.op.outputs.APP_PRIVATE_KEY }}
+          # Organization か利用するリポジトリの Secrets に登録した、進行役の App の秘密鍵
+          private-key: ${{ secrets.CODING_AGENT_COORDINATOR_PRIVATE_KEY }}
           permission-issues: write
 
       - name: 振り分ける

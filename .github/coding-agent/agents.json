@@ -2,8 +2,7 @@
   "$schema": "./agents-schema.json",
   "coordinator": {
     "bot": "your-coordinator-app[bot]",
-    "appClientId": "your-coordinator-app-client-id",
-    "appPrivateKeyRef": "op://CI/Coordinator App/private key"
+    "appClientId": "your-coordinator-app-client-id"
   },
   "agents": {
     "claude": {
@@ -12,8 +11,6 @@
       "bot": "your-claude-app[bot]",
       "workflow": "coding-agent-claude.yml",
       "appClientId": "your-claude-app-client-id",
-      "appPrivateKeyRef": "op://CI/Claude App/private key",
-      "apiKeyRef": "op://CI/Anthropic/credential",
       "model": null
     },
     "codex": {
@@ -22,8 +19,6 @@
       "bot": "your-codex-app[bot]",
       "workflow": "coding-agent-codex.yml",
       "appClientId": "your-codex-app-client-id",
-      "appPrivateKeyRef": "op://CI/Codex App/private key",
-      "apiKeyRef": "op://CI/OpenAI/credential",
       "model": null
     }
   },

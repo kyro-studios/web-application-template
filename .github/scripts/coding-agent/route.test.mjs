@@ -70,7 +70,7 @@ describe('match', () => {
     }
   });
 
-  it('処理するハンドラーがあれば、進行役の GitHub App の設定を出力する', async () => {
+  it('処理するハンドラーがあれば、進行役の GitHub App の Client ID を出力する', async () => {
     const { match } = createRouter([
       { name: 'skip', events: ['issues.closed'], matches: async () => false, run: async () => [] },
       { name: 'handle', events: ['issues.closed'], run: async () => [] },
@@ -80,7 +80,6 @@ describe('match', () => {
 
     assert.equal(core.outputs.handled, 'true');
     assert.equal(core.outputs['coordinator-client-id'], 'your-coordinator-app-client-id');
-    assert.equal(core.outputs['coordinator-private-key-ref'], 'op://CI/Coordinator App/private key');
   });
 
   it('処理するハンドラーが無ければ、何も出力しない', async () => {

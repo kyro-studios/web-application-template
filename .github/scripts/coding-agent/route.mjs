@@ -3,7 +3,7 @@
  *
  * 振り分けは 2 つの段階で行う。
  * 1. match: 読み取り専用の GITHUB_TOKEN で、イベントを処理するハンドラーがあるか判定し、
- *    あれば進行役の GitHub App の設定を出力する。ハンドラーが無ければ、App のトークンを発行せずに終われる
+ *    あれば進行役の GitHub App の Client ID を出力する。ハンドラーが無ければ、App のトークンを発行せずに終われる
  * 2. route: 進行役の GitHub App のトークンで、ハンドラーを実行する。ハンドラーは、Issue の作成などを行い、
  *    エージェントへの依頼の一覧を返す
  *
@@ -16,7 +16,7 @@
  *
  * 出力 (match):
  * - handled: 処理するハンドラーがあれば 'true'
- * - coordinator-client-id / coordinator-private-key-ref: 進行役の GitHub App の Client ID と秘密鍵の参照
+ * - coordinator-client-id: 進行役の GitHub App の Client ID (秘密鍵は、ワークフローが Secrets から固定の名前で読む)
  *
  * 出力 (route):
  * - dispatches: エージェントのワークフローの呼び出し方 (AgentDispatch) の JSON 配列
@@ -131,7 +131,6 @@ export function createRouter(handlers) {
       core.info(`${key} を処理します: ${matched.map((handler) => handler.name).join('、')}`);
       core.setOutput('handled', 'true');
       core.setOutput('coordinator-client-id', config.agents.coordinator.appClientId);
-      core.setOutput('coordinator-private-key-ref', config.agents.coordinator.appPrivateKeyRef);
     },
 
     async route({ github, context, core }) {

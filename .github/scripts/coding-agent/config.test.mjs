@@ -34,14 +34,11 @@ function createAgentsConfig() {
     bot: `${id}-app[bot]`,
     workflow: `coding-agent-${id}.yml`,
     appClientId: `${id}-client-id`,
-    appPrivateKeyRef: `op://CI/${id}/private key`,
-    apiKeyRef: `op://CI/${id}/credential`,
   });
   return {
     coordinator: {
       bot: 'coordinator-app[bot]',
       appClientId: 'coordinator-client-id',
-      appPrivateKeyRef: 'op://CI/coordinator/private key',
     },
     agents: { claude: agent('claude'), codex: agent('codex') },
     roles: {
