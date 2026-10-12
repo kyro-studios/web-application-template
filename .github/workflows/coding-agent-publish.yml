@@ -32,6 +32,11 @@ on:
         description: 変更内容 (changes.patch) とエージェントの出力 (result.json) を含む Artifact の名前
         type: string
         required: true
+      merge-sha:
+        description: コンフリクトの修正で取り込んだ既定ブランチのコミット (それ以外は空)。指定すると、マージのコミットとして push する
+        type: string
+        required: false
+        default: ''
     secrets:
       app-private-key:
         description: エージェントの GitHub App の秘密鍵
@@ -91,6 +96,8 @@ jobs:
           path: work
           ref: ${{ inputs.target-sha }}
           token: ${{ steps.app-token.outputs.token }}
+          # コンフリクトの修正では、マージのために共通の祖先が要るため、履歴をすべて取得する
+          fetch-depth: ${{ inputs.merge-sha != '' && 0 || 1 }}
 
       - name: エージェントの作業結果を取得する
         uses: actions/download-artifact@v8
@@ -170,6 +177,7 @@ jobs:
           AGENT_NAME: ${{ steps.config.outputs.name }}
           PULL_REQUEST_NUMBER: ${{ inputs.pull-request-number }}
           TARGET_SHA: ${{ inputs.target-sha }}
+          MERGE_SHA: ${{ inputs.merge-sha }}
           RESULT_DIR: ${{ runner.temp }}/coding-agent-result
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -177,6 +185,11 @@ jobs:
 
           patch="$RESULT_DIR/changes.patch"
           result="$RESULT_DIR/result.json"
+
+          if [ -n "$MERGE_SHA" ] && [[ ! "$MERGE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::取り込むコミットの SHA が正しくありません: $MERGE_SHA"
+            exit 1
+          fi
 
           read -r head_ref head_sha state < <(gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER" --jq '[.head.ref, .head.sha, .state] | @tsv')
           if [ "$state" != 'open' ] || [ "$head_sha" != "$TARGET_SHA" ]; then
@@ -204,6 +217,12 @@ jobs:
           git config user.name "$bot_login"
           git config user.email "${bot_id}+${bot_login}@users.noreply.github.com"
 
+          # コンフリクトの修正では、エージェントと同じ既定ブランチのコミットを、中身を変えずに (-s ours) マージの途中の状態にする。
+          # そこへ、PR の head から解消した後の状態までの差分を当てると、中身が解消した後の状態の、マージのコミットになる
+          if [ -n "$MERGE_SHA" ]; then
+            git fetch --no-tags origin "$MERGE_SHA"
+            git merge --no-ff --no-commit -s ours "$MERGE_SHA"
+          fi
           git apply --index --binary "$patch"
           git commit --file - <<< "$commit_message"
           # 修正を始めたコミットからの fast-forward だけを許す (その間に push された変更を上書きしない)
@@ -212,7 +231,7 @@ jobs:
           # 修正の回数は、この印の付いたコメントで数える (仕様の 9.4)
           body_file="$RUNNER_TEMP/fix-comment.md"
           {
-            printf '🤖 %s がレビューの指摘を修正しました ([ワークフロー](%s))。\n\n' "$AGENT_NAME" "$RUN_URL"
+            printf '🤖 %s が修正しました ([ワークフロー](%s))。\n\n' "$AGENT_NAME" "$RUN_URL"
             if [ -n "$summary" ]; then
               printf '%s\n\n' "$summary"
             fi

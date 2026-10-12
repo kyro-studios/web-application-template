@@ -58,11 +58,14 @@ jobs:
     outputs:
       agent: ${{ steps.request.outputs.agent }}
       kind: ${{ steps.request.outputs.kind }}
+      merge-sha: ${{ steps.request.outputs.merge-sha }}
     steps:
       - name: 作業を始めるコミットをチェックアウトする
         uses: actions/checkout@v7
         with:
           ref: ${{ inputs.target-sha }}
+          # 修正では、コンフリクトの解消のために既定ブランチを取り込むことがあるため、履歴をすべて取得する
+          fetch-depth: ${{ inputs.mode == 'fix' && 0 || 1 }}
           persist-credentials: false
 
       # 指示やスクリプトは既定ブランチのものを使い、作業ディレクトリの外に置く (変更内容に含めないため)
@@ -104,6 +107,13 @@ jobs:
             exit 1
           fi
           echo "agent=$(jq -r '.agent' "$request")" >> "$GITHUB_OUTPUT"
+          # コンフリクトの修正では、取り込む既定ブランチのコミットが依頼に含まれる
+          merge_sha="$(jq -r '.materials.conflict.baseSha // ""' "$request")"
+          if [ -n "$merge_sha" ] && [[ ! "$merge_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::取り込むコミットの SHA が正しくありません: $merge_sha"
+            exit 1
+          fi
+          echo "merge-sha=$merge_sha" >> "$GITHUB_OUTPUT"
           echo "model=$(jq -r '.execution.model // ""' "$request")" >> "$GITHUB_OUTPUT"
           echo "effort=$(jq -r '.execution.effort // ""' "$request")" >> "$GITHUB_OUTPUT"
           # 実装計画は、ファイルを変更せずに計画を出力する。文書の段階は、作業ディレクトリのファイルだけを変更する
@@ -125,16 +135,37 @@ jobs:
               ;;
           esac
 
+      # コンフリクトの修正では、既定ブランチのコミットを取り込み (コミットはしない)、コンフリクトの印をエージェントに解消させる
+      - name: 既定ブランチを取り込む
+        if: steps.request.outputs.merge-sha != ''
+        env:
+          MERGE_SHA: ${{ steps.request.outputs.merge-sha }}
+        run: |
+          set -euo pipefail
+          git config user.name coding-agent
+          git config user.email coding-agent@users.noreply.github.com
+          # コンフリクトしても止めない。取り込みの途中の状態 (MERGE_HEAD) になっていることだけを確かめる
+          git merge --no-ff --no-commit "$MERGE_SHA" || true
+          if ! git rev-parse -q --verify MERGE_HEAD > /dev/null; then
+            echo "::error::既定ブランチのコミット $MERGE_SHA を取り込めませんでした"
+            exit 1
+          fi
+          git diff --name-only --diff-filter=U > "$RUNNER_TEMP/conflicts.txt"
+          echo "コンフリクトしたファイル:"
+          cat "$RUNNER_TEMP/conflicts.txt"
+
       - name: 作業の指示を作る
         env:
           REQUEST_FILE: ${{ runner.temp }}/coding-agent-requests/${{ inputs.request-id }}.json
           TRUSTED: ${{ runner.temp }}/trusted
+          MERGE_SHA: ${{ steps.request.outputs.merge-sha }}
         run: |
           set -euo pipefail
           node "$TRUSTED/.github/scripts/coding-agent/author-prompt.mjs" \
             --request "$REQUEST_FILE" \
             --prompts "$TRUSTED/.github/coding-agent/prompts" \
-            --prompt-out "$RUNNER_TEMP/author-prompt.md"
+            --prompt-out "$RUNNER_TEMP/author-prompt.md" \
+            ${MERGE_SHA:+--conflicts "$RUNNER_TEMP/conflicts.txt"}
 
       # Codex は bubblewrap で、書き込める場所とネットワークを制限する (permission-profile)
       - name: Codex を隔離する bubblewrap を用意する
@@ -195,6 +226,22 @@ jobs:
           path: ${{ runner.temp }}/coding-agent-plan
           retention-days: 30
 
+      # Markdown の見出しの下線 (=======) と区別するため、始まりと終わりの印だけを確かめる
+      - name: コンフリクトの印が残っていないか確かめる
+        if: steps.request.outputs.merge-sha != ''
+        run: |
+          set -euo pipefail
+          remaining=()
+          while IFS= read -r file; do
+            if [ -n "$file" ] && [ -f "$file" ] && grep -qE '^(<<<<<<<|>>>>>>>)( |$)' "$file"; then
+              remaining+=("$file")
+            fi
+          done < "$RUNNER_TEMP/conflicts.txt"
+          if [ "${#remaining[@]}" -gt 0 ]; then
+            echo "::error::コンフリクトの印が残っています: ${remaining[*]}"
+            exit 1
+          fi
+
       - name: 変更内容をまとめる
         if: steps.request.outputs.kind == 'change'
         env:
@@ -233,6 +280,7 @@ jobs:
       pull-request-number: ${{ inputs.pull-request-number }}
       target-sha: ${{ inputs.target-sha }}
       artifact-name: coding-agent-result
+      merge-sha: ${{ needs.work.outputs.merge-sha }}
     secrets:
       # Organization か利用するリポジトリの Secrets に登録した、Codex 用の App の秘密鍵
       app-private-key: ${{ secrets.CODING_AGENT_CODEX_PRIVATE_KEY }}
