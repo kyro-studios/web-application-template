@@ -129,7 +129,10 @@ jobs:
             echo "::warning::エージェントがコミットメッセージを出力しなかったため、既定値を使います"
             commit_message="chore: resolve #${ISSUE_NUMBER}"
           fi
-          title="$(printf '%s\n' "$commit_message" | head -n 1)"
+          # コミットメッセージは 1 行目だけにする。develop には squash で PR のタイトルだけが残るため、本文はどこにも残らない。
+          # 本文の行の長さで commitlint が失敗しないよう、本文を含めない (変更の説明は PR の説明に残る)
+          commit_message="$(printf '%s\n' "$commit_message" | head -n 1)"
+          title="$commit_message"
 
           bot_login="${APP_SLUG}[bot]"
           bot_id="$(gh api "/users/${bot_login}" --jq .id)"
@@ -193,6 +196,8 @@ jobs:
             echo "::warning::エージェントがコミットメッセージを出力しなかったため、既定値を使います"
             commit_message="fix: address review comments on #${PULL_REQUEST_NUMBER}"
           fi
+          # 作成のときと同じく、コミットメッセージは 1 行目だけにする (修正の説明は PR のコメントに残る)
+          commit_message="$(printf '%s\n' "$commit_message" | head -n 1)"
 
           bot_login="${APP_SLUG}[bot]"
           bot_id="$(gh api "/users/${bot_login}" --jq .id)"

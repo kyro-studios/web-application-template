@@ -160,13 +160,68 @@ describe('launchStage.run', () => {
     assert.equal((await run(fake, dispatchContext(specification.number, { force: true }), launchStage)).result.requests?.length, 1);
   });
 
-  it('依存先が解決していない段階や、まだ対応していない段階は起動しない', async () => {
-    const { fake, specification, planning } = setup();
+  it('依存先が解決していない段階は起動しない', async () => {
+    const { fake, specification } = setup();
     assert.deepEqual((await run(fake, dispatchContext(specification.number), launchStage)).result, {});
+    assert.equal(fake.comments.length, 0);
+  });
 
-    // 実装タスクの起動には、まだ対応していない
-    const task = fake.addIssue({ labels: ['stage:implementation'], parent: planning.number, assignees: ['claude-account'] });
-    assert.deepEqual((await run(fake, dispatchContext(task.number), launchStage)).result, {});
+  it('実装タスクの作成を、Assign されている実装担当に依頼する', async () => {
+    const { fake, planning } = setup();
+    const task = fake.addIssue({ title: 'バックエンドの土台を作る', body: 'Gradle で作る', labels: ['stage:implementation'], parent: planning.number, assignees: ['claude-account'] });
+
+    const { result } = await run(fake, dispatchContext(task.number), launchStage);
+
+    const request = result.requests?.[0];
+    assert.equal(request?.id, `create-issue-${task.number}`);
+    assert.equal(request?.agent, 'claude');
+    assert.equal(request?.stage, 'implementation');
+    assert.deepEqual(request?.materials.issue, { number: task.number, title: 'バックエンドの土台を作る', body: 'Gradle で作る' });
+    assert.equal(request?.materials.artifact, null);
+    assert.deepEqual(request?.materials.allowedFiles, { allow: ['**'], deny: ['.github/**', 'docs/features/**'] });
+    assert.deepEqual(
+      request?.materials.documents.map((/** @type {{ path: string }} */ document) => document.path),
+      ['docs/features/1-user-login/specification.md', 'docs/features/1-user-login/domain-model.md', 'docs/features/1-user-login/architecture.md'],
+    );
+    assert.equal(request?.materials.implementers, undefined);
+    assert.ok(fake.comments[0].body.includes('「実装タスク」'));
+  });
+
+  it('実装タスクは、依存先のタスクと子タスクがすべて完了するまで起動しない', async () => {
+    const { fake, planning } = setup();
+    const foundation = fake.addIssue({ labels: ['stage:implementation'], parent: planning.number, assignees: ['claude-account'] });
+    const parentTask = fake.addIssue({ labels: ['stage:implementation'], parent: planning.number, assignees: ['claude-account'] });
+    const child = fake.addIssue({ labels: ['stage:implementation'], parent: parentTask.number, assignees: ['claude-account'] });
+    child.blockedBy.push(foundation.number);
+
+    assert.deepEqual((await run(fake, dispatchContext(child.number), launchStage)).result, {});
+    assert.deepEqual((await run(fake, dispatchContext(parentTask.number), launchStage)).result, {});
+
+    // 依存先のタスクが完了すると子タスクが起動でき、子タスクが完了すると親タスクが起動できる
+    close(fake, foundation.number);
+    assert.deepEqual((await run(fake, closedContext(foundation.number, 'codex-app[bot]'), wakeWaitingStages)).result, { redispatch: [child.number] });
+    close(fake, child.number);
+    assert.deepEqual((await run(fake, closedContext(child.number, 'codex-app[bot]'), wakeWaitingStages)).result, { redispatch: [parentTask.number] });
+  });
+
+  it('実装担当のエージェントが Assign されていないか、複数 Assign されている実装タスクは起動しない', async () => {
+    const { fake, planning } = setup();
+    const humanTask = fake.addIssue({ labels: ['stage:implementation'], parent: planning.number, assignees: ['alice'] });
+    assert.deepEqual((await run(fake, dispatchContext(humanTask.number), launchStage)).result, {});
+
+    // レビュー担当 (codex) は実装担当ではないため、担当として数えない
+    const reviewerTask = fake.addIssue({ labels: ['stage:implementation'], parent: planning.number, assignees: ['codex-account'] });
+    assert.deepEqual((await run(fake, dispatchContext(reviewerTask.number), launchStage)).result, {});
+
+    config.agents.agents.devin = { ...config.agents.agents.claude, name: 'devin', assignee: 'devin-account', bot: 'devin-app[bot]' };
+    config.agents.roles.implementers.push('devin');
+    try {
+      const sharedTask = fake.addIssue({ labels: ['stage:implementation'], parent: planning.number, assignees: ['claude-account', 'devin-account'] });
+      assert.deepEqual((await run(fake, dispatchContext(sharedTask.number), launchStage)).result, {});
+    } finally {
+      delete config.agents.agents.devin;
+      config.agents.roles.implementers.pop();
+    }
     assert.equal(fake.comments.length, 0);
   });
 

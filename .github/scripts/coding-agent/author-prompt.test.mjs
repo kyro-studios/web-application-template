@@ -94,7 +94,10 @@ describe('promptFiles', () => {
   it('依頼の種類と段階の種類ごとに、読み込む指示のファイルを決める', () => {
     assert.deepEqual(promptFiles('create', 'specification'), ['create/common.md', 'create/documents.md', 'create/specification.md']);
     assert.deepEqual(promptFiles('create', 'planning'), ['create/common.md', 'create/planning.md']);
+    assert.deepEqual(promptFiles('create', 'implementation'), ['create/common.md', 'create/implementation.md', 'create/implementation-output.md']);
     assert.deepEqual(promptFiles('fix', 'architecture'), ['fix/common.md', 'create/architecture.md']);
+    // 修正では、作成のときの出力の指示を含めない
+    assert.deepEqual(promptFiles('fix', 'implementation'), ['fix/common.md', 'create/implementation.md']);
   });
 
   it('起動できる段階で読み込む指示のファイルが、すべてある', async () => {
@@ -104,10 +107,9 @@ describe('promptFiles', () => {
       ...(await readdir(new URL('fix/', promptsDir))).map((file) => `fix/${file}`),
     ]);
     for (const stage of CREATABLE_STAGES) {
-      for (const file of promptFiles('create', stage)) {
+      for (const file of [...promptFiles('create', stage), ...(stage === 'planning' ? [] : promptFiles('fix', stage))]) {
         assert.ok(files.has(file), file);
       }
     }
-    assert.ok(files.has('fix/common.md'));
   });
 });
