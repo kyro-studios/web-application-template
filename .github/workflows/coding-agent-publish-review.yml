@@ -1,0 +1,117 @@
+name: Coding Agent Publish Review
+
+# エージェントのワークフローから呼び出す、共通のレビューの投稿ジョブ。
+# レビュー担当の出力 (review.json) を、レビュー担当の GitHub App で PR に投稿し、Approve なら自動マージを有効にする。
+# 差し戻したら、振り分け用のワークフローを手動実行して修正を依頼する (仕様の 8.3、9.1)。
+on:
+  workflow_call:
+    inputs:
+      agent:
+        description: レビュー担当のエージェントの識別子 (agents.json のキー)
+        type: string
+        required: true
+      stage:
+        description: 段階
+        type: string
+        required: true
+      pull-request-number:
+        description: レビューした PR の番号
+        type: string
+        required: true
+      target-sha:
+        description: レビューしたコミット
+        type: string
+        required: true
+      artifact-name:
+        description: レビューの結果 (review.json) を含む Artifact の名前
+        type: string
+        required: true
+    secrets:
+      app-private-key:
+        description: レビュー担当のエージェントの GitHub App の秘密鍵
+        required: true
+
+permissions: {}
+
+jobs:
+  publish:
+    name: レビューの投稿
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # 差し戻したら、振り分け用のワークフローを手動実行して修正を依頼する
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github
+          persist-credentials: false
+
+      # postinstall の husky の初期化を動かさないよう、スクリプトを実行せずにインストールする
+      - name: 依存パッケージをインストールする
+        run: npm ci --ignore-scripts
+
+      - name: レビューの結果を取得する
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ runner.temp }}/coding-agent-review
+
+      - name: レビュー担当の設定を読み込む
+        id: config
+        env:
+          AGENT: ${{ inputs.agent }}
+        run: |
+          set -euo pipefail
+          agents=.github/coding-agent/agents.json
+          if [ "$(jq --arg agent "$AGENT" '.agents | has($agent)' "$agents")" != 'true' ]; then
+            echo "::error::エージェント $AGENT は agents.json に登録されていません"
+            exit 1
+          fi
+          echo "client-id=$(jq -r --arg agent "$AGENT" '.agents[$agent].appClientId' "$agents")" >> "$GITHUB_OUTPUT"
+          echo "name=$(jq -r --arg agent "$AGENT" '.agents[$agent].name' "$agents")" >> "$GITHUB_OUTPUT"
+
+      # レビューの投稿 (Approve を含む) と自動マージは、レビュー担当の GitHub App で行う
+      - name: レビュー担当の App のトークンを発行する
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ steps.config.outputs.client-id }}
+          private-key: ${{ secrets.app-private-key }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: レビューを投稿する
+        id: publish
+        uses: actions/github-script@v9
+        env:
+          REVIEW_FILE: ${{ runner.temp }}/coding-agent-review/review.json
+          PULL_REQUEST_NUMBER: ${{ inputs.pull-request-number }}
+          TARGET_SHA: ${{ inputs.target-sha }}
+          STAGE: ${{ inputs.stage }}
+          REVIEWER_NAME: ${{ steps.config.outputs.name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { default: publishReview } = await import(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/coding-agent/publish-review.mjs`
+            );
+            await publishReview({ github, context, core });
+
+      # pull_request_review イベントでは PR のブランチのスクリプトが動くため、使わずに振り分けを手動実行する
+      - name: 修正を依頼するため、振り分け用のワークフローを手動実行する
+        if: steps.publish.outputs.event == 'REQUEST_CHANGES'
+        uses: actions/github-script@v9
+        env:
+          PULL_REQUEST_NUMBER: ${{ inputs.pull-request-number }}
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              ...context.repo,
+              workflow_id: 'coding-agent-router.yml',
+              ref: context.payload.repository.default_branch,
+              inputs: { 'issue-number': process.env.PULL_REQUEST_NUMBER, force: 'false' },
+            });
+            core.info(`#${process.env.PULL_REQUEST_NUMBER} の修正を依頼するため、振り分け用のワークフローを起動しました`);

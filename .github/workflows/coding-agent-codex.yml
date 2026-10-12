@@ -1,12 +1,13 @@
 name: Coding Agent (Codex)
 
-# 振り分け用のワークフローが、レビューの依頼ごとに手動実行 (workflow_dispatch) する。
+# 振り分け用のワークフローが、作成、修正、レビューの依頼ごとに手動実行 (workflow_dispatch) する。
 # 入力の形式は、すべてのエージェントのワークフローで共通にしている (仕様の 2.2)。
+# モデルと effort は依頼に含まれる値をそのまま使い、このワークフローには書かない (agents.json で決める)。
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 依頼の種類 (このワークフローは review だけを受け付ける)
+        description: 依頼の種類 (create、fix、review)
         type: string
         required: true
       stage:
@@ -18,12 +19,12 @@ on:
         type: string
         required: true
       pull-request-number:
-        description: 対象の PR の番号
+        description: 対象の PR の番号 (作成のときは空)
         type: string
         required: false
         default: ''
       target-sha:
-        description: レビューするコミット
+        description: 作業を始めるコミット (修正やレビューのときは、PR の head)
         type: string
         required: true
       request-run-id:
@@ -37,18 +38,202 @@ on:
 
 permissions: {}
 
-# 同じ PR のレビューは、新しい依頼が来たら古いものを取り消し、最新のコミットだけをレビューする
+# 同じ PR のレビューは、新しい依頼が来たら古いものを取り消し、最新のコミットだけをレビューする。
+# 作成と修正は、同じ Issue や PR への作業を 1 つずつ行う (作業の途中で取り消さない)
 concurrency:
-  group: coding-agent-codex-${{ inputs.pull-request-number || inputs.issue-number }}
-  cancel-in-progress: true
+  group: coding-agent-codex-${{ inputs.mode == 'review' && 'review' || 'work' }}-${{ inputs.pull-request-number || inputs.issue-number }}
+  cancel-in-progress: ${{ inputs.mode == 'review' }}
 
 jobs:
+  work:
+    name: Codex による作業
+    if: vars.CODING_AGENT_ENABLED == 'true' && (inputs.mode == 'create' || inputs.mode == 'fix')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # 作成担当には書き込み権限を持つトークンを渡さない (push と PR の作成は publish ジョブが行う)
+    permissions:
+      contents: read
+      # 依頼の Artifact を、振り分け用のワークフローの実行から取得する
+      actions: read
+    outputs:
+      agent: ${{ steps.request.outputs.agent }}
+      kind: ${{ steps.request.outputs.kind }}
+    steps:
+      - name: 作業を始めるコミットをチェックアウトする
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.target-sha }}
+          persist-credentials: false
+
+      # 指示やスクリプトは既定ブランチのものを使い、作業ディレクトリの外に置く (変更内容に含めないため)
+      - name: 既定ブランチの仕組みをチェックアウトする
+        uses: actions/checkout@v7
+        with:
+          path: coding-agent-trusted
+          sparse-checkout: .github
+          persist-credentials: false
+
+      - name: 既定ブランチの仕組みを作業ディレクトリの外に移す
+        run: mv coding-agent-trusted "$RUNNER_TEMP/trusted"
+
+      - name: 依頼を取得する
+        uses: actions/download-artifact@v8
+        with:
+          name: coding-agent-requests
+          run-id: ${{ inputs.request-run-id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/coding-agent-requests
+
+      - name: 依頼の内容を確かめる
+        id: request
+        env:
+          REQUEST_ID: ${{ inputs.request-id }}
+          MODE: ${{ inputs.mode }}
+          TARGET_SHA: ${{ inputs.target-sha }}
+          REQUEST_DIR: ${{ runner.temp }}/coding-agent-requests
+          TRUSTED: ${{ runner.temp }}/trusted
+        run: |
+          set -euo pipefail
+          if [[ ! "$REQUEST_ID" =~ ^[a-z0-9][a-z0-9-]{0,63}$ ]]; then
+            echo "::error::依頼の識別子の形式が正しくありません: $REQUEST_ID"
+            exit 1
+          fi
+          request="$REQUEST_DIR/$REQUEST_ID.json"
+          if [ "$(jq -r '.mode' "$request")" != "$MODE" ] || [ "$(jq -r '.targetSha' "$request")" != "$TARGET_SHA" ]; then
+            echo "::error::依頼の内容が、ワークフローの入力と一致しません"
+            exit 1
+          fi
+          echo "agent=$(jq -r '.agent' "$request")" >> "$GITHUB_OUTPUT"
+          echo "model=$(jq -r '.execution.model // ""' "$request")" >> "$GITHUB_OUTPUT"
+          echo "effort=$(jq -r '.execution.effort // ""' "$request")" >> "$GITHUB_OUTPUT"
+          # 実装計画は、ファイルを変更せずに計画を出力する。文書の段階は、作業ディレクトリのファイルだけを変更する
+          case "$(jq -r '.stage' "$request")" in
+            planning)
+              echo "kind=planning" >> "$GITHUB_OUTPUT"
+              echo "permission-profile=:read-only" >> "$GITHUB_OUTPUT"
+              echo "output-schema=$TRUSTED/.github/coding-agent/plan-schema.json" >> "$GITHUB_OUTPUT"
+              ;;
+            implementation)
+              # 実装には、ネットワークや Docker を使える権限の設計が別に必要なため、まだ対応していない
+              echo "::error::Codex による実装タスクには、まだ対応していません (agents.json の roles.implementation.implementers を見直してください)"
+              exit 1
+              ;;
+            *)
+              echo "kind=change" >> "$GITHUB_OUTPUT"
+              echo "permission-profile=:workspace" >> "$GITHUB_OUTPUT"
+              echo "output-schema=$TRUSTED/.github/coding-agent/result-schema.json" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: 作業の指示を作る
+        env:
+          REQUEST_FILE: ${{ runner.temp }}/coding-agent-requests/${{ inputs.request-id }}.json
+          TRUSTED: ${{ runner.temp }}/trusted
+        run: |
+          set -euo pipefail
+          node "$TRUSTED/.github/scripts/coding-agent/author-prompt.mjs" \
+            --request "$REQUEST_FILE" \
+            --prompts "$TRUSTED/.github/coding-agent/prompts" \
+            --prompt-out "$RUNNER_TEMP/author-prompt.md"
+
+      - name: Codex で作業する
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: ${{ runner.temp }}/author-prompt.md
+          permission-profile: ${{ steps.request.outputs.permission-profile }}
+          output-schema-file: ${{ steps.request.outputs.output-schema }}
+          output-file: ${{ runner.temp }}/coding-agent-output.json
+          model: ${{ steps.request.outputs.model }}
+          effort: ${{ steps.request.outputs.effort }}
+          # 振り分け用のワークフロー (github-actions[bot]) からの手動実行を許可する
+          allow-bots: true
+
+      - name: 計画をまとめる
+        if: steps.request.outputs.kind == 'planning'
+        env:
+          OUTPUT_FILE: ${{ runner.temp }}/coding-agent-output.json
+          PLAN_DIR: ${{ runner.temp }}/coding-agent-plan
+        run: |
+          set -euo pipefail
+          if [ ! -s "$OUTPUT_FILE" ]; then
+            echo "::error::作成担当が計画を出力しませんでした"
+            exit 1
+          fi
+          mkdir -p "$PLAN_DIR"
+          cp "$OUTPUT_FILE" "$PLAN_DIR/plan.json"
+          jq . "$PLAN_DIR/plan.json"
+
+      - name: 計画を保存する
+        if: steps.request.outputs.kind == 'planning'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coding-agent-plan
+          path: ${{ runner.temp }}/coding-agent-plan
+          retention-days: 30
+
+      - name: 変更内容をまとめる
+        if: steps.request.outputs.kind == 'change'
+        env:
+          TARGET_SHA: ${{ inputs.target-sha }}
+          OUTPUT_FILE: ${{ runner.temp }}/coding-agent-output.json
+          RESULT_DIR: ${{ runner.temp }}/coding-agent-result
+        run: |
+          set -euo pipefail
+          mkdir -p "$RESULT_DIR"
+          if [ -f "$OUTPUT_FILE" ]; then
+            cp "$OUTPUT_FILE" "$RESULT_DIR/result.json"
+          fi
+          # エージェントが指示に反してコミットしていても漏れないよう、作業を始めたコミットと比較する
+          git add --all
+          git diff --cached --binary "$TARGET_SHA" > "$RESULT_DIR/changes.patch"
+          git diff --cached --stat "$TARGET_SHA"
+
+      - name: 変更内容を保存する
+        if: steps.request.outputs.kind == 'change'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coding-agent-result
+          path: ${{ runner.temp }}/coding-agent-result
+          retention-days: 7
+
+  publish:
+    needs: work
+    if: needs.work.outputs.kind == 'change'
+    uses: ./.github/workflows/coding-agent-publish.yml
+    permissions:
+      contents: read
+    with:
+      agent: ${{ needs.work.outputs.agent }}
+      mode: ${{ inputs.mode }}
+      issue-number: ${{ inputs.issue-number }}
+      pull-request-number: ${{ inputs.pull-request-number }}
+      target-sha: ${{ inputs.target-sha }}
+      artifact-name: coding-agent-result
+    secrets:
+      # Organization か利用するリポジトリの Secrets に登録した、Codex 用の App の秘密鍵
+      app-private-key: ${{ secrets.CODING_AGENT_CODEX_PRIVATE_KEY }}
+
+  # 実装計画では、計画から進行役の App で実装タスクの Issue を作る
+  tasks:
+    needs: work
+    if: needs.work.outputs.kind == 'planning'
+    uses: ./.github/workflows/coding-agent-tasks.yml
+    permissions:
+      contents: read
+    with:
+      planning-issue-number: ${{ inputs.issue-number }}
+      artifact-name: coding-agent-plan
+    secrets:
+      # Organization か利用するリポジトリの Secrets に登録した、進行役の App の秘密鍵
+      coordinator-private-key: ${{ secrets.CODING_AGENT_COORDINATOR_PRIVATE_KEY }}
+
   review:
     name: Codex によるレビュー
     if: vars.CODING_AGENT_ENABLED == 'true' && inputs.mode == 'review'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # レビュー担当には書き込み権限を持つトークンを渡さない (レビューの投稿とマージは publish ジョブが行う)
+    # レビュー担当には書き込み権限を持つトークンを渡さない (レビューの投稿とマージは publish-review ジョブが行う)
     permissions:
       contents: read
       # 依頼の Artifact を、振り分け用のワークフローの実行から取得する
@@ -98,9 +283,9 @@ jobs:
             echo "::error::依頼の内容が、ワークフローの入力と一致しません"
             exit 1
           fi
-          agent="$(jq -r '.agent' "$request")"
-          echo "agent=$agent" >> "$GITHUB_OUTPUT"
-          echo "model=$(jq -r --arg agent "$agent" '.agents[$agent].model // ""' trusted/.github/coding-agent/agents.json)" >> "$GITHUB_OUTPUT"
+          echo "agent=$(jq -r '.agent' "$request")" >> "$GITHUB_OUTPUT"
+          echo "model=$(jq -r '.execution.model // ""' "$request")" >> "$GITHUB_OUTPUT"
+          echo "effort=$(jq -r '.execution.effort // ""' "$request")" >> "$GITHUB_OUTPUT"
 
       - name: レビューの指示を作る
         id: prompt
@@ -137,6 +322,7 @@ jobs:
           output-schema-file: ${{ github.workspace }}/trusted/.github/coding-agent/review-schema.json
           output-file: ${{ runner.temp }}/coding-agent-review/review.json
           model: ${{ steps.request.outputs.model }}
+          effort: ${{ steps.request.outputs.effort }}
           # 振り分け用のワークフロー (github-actions[bot]) からの手動実行を許可する
           allow-bots: true
 
@@ -146,81 +332,19 @@ jobs:
           path: ${{ runner.temp }}/coding-agent-review/review.json
           retention-days: 7
 
-  publish:
-    name: レビューの投稿
+  publish-review:
     needs: review
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    uses: ./.github/workflows/coding-agent-publish-review.yml
     permissions:
       contents: read
       # 差し戻したら、振り分け用のワークフローを手動実行して修正を依頼する
       actions: write
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          sparse-checkout: .github
-          persist-credentials: false
-
-      # postinstall の husky の初期化を動かさないよう、スクリプトを実行せずにインストールする
-      - name: 依存パッケージをインストールする
-        run: npm ci --ignore-scripts
-
-      - name: レビューの結果を取得する
-        uses: actions/download-artifact@v8
-        with:
-          name: coding-agent-review
-          path: ${{ runner.temp }}/coding-agent-review
-
-      - name: レビュー担当の設定を読み込む
-        id: config
-        env:
-          AGENT: ${{ needs.review.outputs.agent }}
-        run: |
-          set -euo pipefail
-          echo "client-id=$(jq -r --arg agent "$AGENT" '.agents[$agent].appClientId' .github/coding-agent/agents.json)" >> "$GITHUB_OUTPUT"
-          echo "name=$(jq -r --arg agent "$AGENT" '.agents[$agent].name' .github/coding-agent/agents.json)" >> "$GITHUB_OUTPUT"
-
-      # レビューの投稿 (Approve を含む) と自動マージは、レビュー担当の GitHub App で行う
-      - name: レビュー担当の App のトークンを発行する
-        id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          client-id: ${{ steps.config.outputs.client-id }}
-          # Organization か利用するリポジトリの Secrets に登録した、Codex 用の App の秘密鍵
-          private-key: ${{ secrets.CODING_AGENT_CODEX_PRIVATE_KEY }}
-          permission-contents: write
-          permission-pull-requests: write
-
-      - name: レビューを投稿する
-        id: publish
-        uses: actions/github-script@v9
-        env:
-          REVIEW_FILE: ${{ runner.temp }}/coding-agent-review/review.json
-          PULL_REQUEST_NUMBER: ${{ inputs.pull-request-number }}
-          TARGET_SHA: ${{ inputs.target-sha }}
-          STAGE: ${{ inputs.stage }}
-          REVIEWER_NAME: ${{ steps.config.outputs.name }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          script: |
-            const { default: publishReview } = await import(
-              `${process.env.GITHUB_WORKSPACE}/.github/scripts/coding-agent/publish-review.mjs`
-            );
-            await publishReview({ github, context, core });
-
-      # pull_request_review イベントでは PR のブランチのスクリプトが動くため、使わずに振り分けを手動実行する
-      - name: 修正を依頼するため、振り分け用のワークフローを手動実行する
-        if: steps.publish.outputs.event == 'REQUEST_CHANGES'
-        uses: actions/github-script@v9
-        env:
-          PULL_REQUEST_NUMBER: ${{ inputs.pull-request-number }}
-        with:
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              ...context.repo,
-              workflow_id: 'coding-agent-router.yml',
-              ref: context.payload.repository.default_branch,
-              inputs: { 'issue-number': process.env.PULL_REQUEST_NUMBER, force: 'false' },
-            });
-            core.info(`#${process.env.PULL_REQUEST_NUMBER} の修正を依頼するため、振り分け用のワークフローを起動しました`);
+    with:
+      agent: ${{ needs.review.outputs.agent }}
+      stage: ${{ inputs.stage }}
+      pull-request-number: ${{ inputs.pull-request-number }}
+      target-sha: ${{ inputs.target-sha }}
+      artifact-name: coding-agent-review
+    secrets:
+      # Organization か利用するリポジトリの Secrets に登録した、Codex 用の App の秘密鍵
+      app-private-key: ${{ secrets.CODING_AGENT_CODEX_PRIVATE_KEY }}
