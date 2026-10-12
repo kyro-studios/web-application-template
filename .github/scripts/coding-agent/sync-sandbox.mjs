@@ -4,8 +4,9 @@
  * テンプレートから作ったリポジトリは、テンプレートの後の変更を自動では受け取らない。また、Issue のイベントで
  * 動くワークフローは既定ブランチ (develop) のものが使われるため、動作確認の前に develop へ反映する必要がある。
  * develop はルールセットで保護されているため、取り込みを push する間だけルールセットを無効にし、必ず有効に戻す。
- * 確認用のリポジトリに固有の設定 (KEPT_PATHS) と、成果物を置くディレクトリ (stages.json の featureRoot) は、
- * テンプレートの内容で置き換えずに残す。--agents を指定すると、
+ * 取り込むのは、仕組みのファイル (SYNCED_PATTERNS) だけ。その範囲の中はテンプレートと同じにし (テンプレートで
+ * 削除したファイルも削除する)、範囲の外 (エージェントが作ったアプリケーションのコードや成果物) には触れない。
+ * テンプレートのファイルのうち、どちらにも分類されていないものがあれば、何もせずに終わる。--agents を指定すると、
  * 手元のファイルで agents.json を置き換える。push する前に、取り込んだ後の設定ファイルを検証する。
  *
  * 確認用のリポジトリの管理者が、gh コマンドにログインした状態で実行する。
@@ -26,13 +27,79 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
+import { minimatch } from 'minimatch';
 import { CONFIG_DIR, loadConfig } from './config.mjs';
 import { DEVELOP_BRANCH, RULESET_NAMES } from './setup-repository.mjs';
 
 const REPOSITORY_PATTERN = /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/;
 
-/** 確認用のリポジトリに固有の設定のため、テンプレートの内容で置き換えずに残すファイル */
-export const KEPT_PATHS = [`${CONFIG_DIR}/agents.json`];
+/**
+ * テンプレートから取り込むファイル (仕組みのファイル)。テンプレートにファイルを足したら、ここか
+ * NOT_SYNCED_PATTERNS のどちらかに分類する (分類されていないファイルがあると、取り込みは失敗する)
+ */
+export const SYNCED_PATTERNS = [
+  `${CONFIG_DIR}/**`,
+  '.github/scripts/coding-agent/**',
+  '.github/workflows/coding-agent-*.yml',
+  '.github/workflows/validate-conventional-commits.yml',
+  '.github/ISSUE_TEMPLATE/feature.yml',
+  '.husky/**',
+  'commitlint.config.mjs',
+  'package.json',
+  'package-lock.json',
+  'scripts/postinstall.js',
+];
+
+/**
+ * テンプレートにあるが、取り込まないファイル。確認用のリポジトリに固有の設定 (agents.json) と、
+ * テンプレートから作ったリポジトリ (エージェントを含む) が書き換えるファイル。SYNCED_PATTERNS より優先する
+ */
+export const NOT_SYNCED_PATTERNS = [`${CONFIG_DIR}/agents.json`, '.gitignore', 'README.md', 'AGENTS.md', '.vscode/**'];
+
+/**
+ * @param {string} path リポジトリのルートからのパス
+ * @param {string[]} patterns
+ * @returns {boolean}
+ */
+function matchesAny(path, patterns) {
+  return patterns.some((pattern) => minimatch(path, pattern, { dot: true }));
+}
+
+/**
+ * ファイルを取り込むかどうかを返す。どちらにも分類されていなければ undefined を返す。
+ *
+ * @param {string} path リポジトリのルートからのパス
+ * @returns {'synced' | 'not-synced' | undefined}
+ */
+export function classifyPath(path) {
+  if (matchesAny(path, NOT_SYNCED_PATTERNS)) {
+    return 'not-synced';
+  }
+  return matchesAny(path, SYNCED_PATTERNS) ? 'synced' : undefined;
+}
+
+/**
+ * @typedef {object} SyncPlan
+ * @property {string[]} checkout テンプレートの内容にするファイル (追加と変更)
+ * @property {string[]} remove テンプレートで削除されたため、確認用のリポジトリからも削除するファイル
+ * @property {string[]} unclassified テンプレートのファイルのうち、どちらにも分類されていないもの
+ */
+
+/**
+ * 取り込みで追加、変更、削除するファイルを決める。取り込む範囲の外のファイルは、どちらにも含めない。
+ *
+ * @param {string[]} templateFiles テンプレートのファイル
+ * @param {string[]} sandboxFiles 確認用のリポジトリのファイル
+ * @returns {SyncPlan}
+ */
+export function planSync(templateFiles, sandboxFiles) {
+  const inTemplate = new Set(templateFiles);
+  return {
+    checkout: templateFiles.filter((path) => classifyPath(path) === 'synced'),
+    remove: sandboxFiles.filter((path) => classifyPath(path) === 'synced' && !inTemplate.has(path)),
+    unclassified: templateFiles.filter((path) => classifyPath(path) === undefined),
+  };
+}
 
 /**
  * @typedef {object} SyncOptions
@@ -119,18 +186,16 @@ function ghApi(method, path, body) {
 }
 
 /**
- * 確認用のリポジトリの、成果物を置くディレクトリを返す。stages.json が無ければ空の配列を返す。
+ * コミットに含まれるファイルのパスを返す。
  *
- * @param {string} cwd 確認用のリポジトリを clone したディレクトリ
+ * @param {string} commit
+ * @param {string} cwd
  * @returns {string[]}
  */
-function featureRootOf(cwd) {
-  try {
-    const stages = JSON.parse(git(['show', `HEAD:${CONFIG_DIR}/stages.json`], { cwd }));
-    return typeof stages.featureRoot === 'string' && stages.featureRoot !== '' ? [stages.featureRoot] : [];
-  } catch {
-    return [];
-  }
+function filesOf(commit, cwd) {
+  return git(['-c', 'core.quotePath=false', 'ls-tree', '-r', '--name-only', commit], { cwd })
+    .split('\n')
+    .filter((path) => path !== '');
 }
 
 /**
@@ -144,14 +209,18 @@ async function sync(options) {
     git(['fetch', '--quiet', `https://github.com/${options.template}.git`, options.ref], { cwd });
     const sha = git(['rev-parse', 'FETCH_HEAD'], { cwd });
 
-    // ファイルの中身をテンプレートと同じにする (テンプレートで削除したファイルも削除する)
-    git(['rm', '-r', '--quiet', '--ignore-unmatch', '.'], { cwd });
-    git(['checkout', 'FETCH_HEAD', '--', '.'], { cwd });
-    for (const path of [...KEPT_PATHS, ...featureRootOf(cwd)]) {
-      if (git(['ls-tree', '--name-only', 'HEAD', '--', path], { cwd }) !== '') {
-        git(['checkout', 'HEAD', '--', path], { cwd });
-      }
+    // 取り込む範囲の中だけ、テンプレートと同じにする (テンプレートで削除したファイルも削除する)
+    const plan = planSync(filesOf('FETCH_HEAD', cwd), filesOf('HEAD', cwd));
+    if (plan.unclassified.length > 0) {
+      throw new Error(
+        `テンプレートに、取り込むかどうかが決まっていないファイルがあります。sync-sandbox.mjs の SYNCED_PATTERNS か NOT_SYNCED_PATTERNS に加えてください:\n${plan.unclassified.map((path) => `  ${path}`).join('\n')}`,
+      );
     }
+    // パスに glob の記号が含まれても、そのままのパスとして扱う
+    if (plan.remove.length > 0) {
+      git(['--literal-pathspecs', 'rm', '--quiet', '--pathspec-from-file=-'], { cwd, input: plan.remove.join('\n') });
+    }
+    git(['--literal-pathspecs', 'checkout', 'FETCH_HEAD', '--pathspec-from-file=-'], { cwd, input: plan.checkout.join('\n') });
     if (options.agents !== undefined) {
       await copyFile(options.agents, join(cwd, CONFIG_DIR, 'agents.json'));
       git(['add', '--', `${CONFIG_DIR}/agents.json`], { cwd });
