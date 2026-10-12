@@ -3,6 +3,12 @@
 このレポジトリは Coding Agent が自動的に Web Application を開発するためのテンプレートレポジトリです。
 以下のフローに従って、異なるエージェント同士が協調しながら開発を進めていきます。
 
+## 使い方
+
+- テンプレートから作ったリポジトリで仕組みを動かすには、[セットアップ手順](.github/coding-agent/README.md)に従って準備してください
+- 下の「開発フロー」を GitHub 上の仕組みとしてどう実現しているかは、[仕様](.github/coding-agent/specification.md)にまとめています
+- 各段階を担当するエージェントやモデルは、[`agents.json`](.github/coding-agent/agents.json) で変えられます。下の擬似コードの Claude と Codex は、テンプレートの既定の担当です
+
 ## 開発フロー
 
 ### 新規機能開発 (機能実装完了まで)
