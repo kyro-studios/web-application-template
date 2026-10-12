@@ -26,10 +26,22 @@ jobs:
   route:
     name: 振り分け
     # テンプレート自体や、セットアップ前のリポジトリでは、ランナーを起動せずに終える。
-    # push は、既定ブランチへのものだけを処理する (エージェントのブランチへの push では、ランナーを起動しない)
+    # 振り分けが扱いうるイベントのときだけランナーを起動する。ここでは agents.json を読めないため、条件は粗くし、
+    # 細かい判定は各ハンドラーの matches に任せる
+    # - push: 既定ブランチへのものだけ (エージェントのブランチへの push では起動しない)
+    # - Issue の作成と編集: feature ラベルの付いた Issue (機能の開始) だけ。段階の Issue や実装タスクの Issue の作成では起動しない
+    # - Issue の Assign と Close、PR のイベント (on の types で絞ってある)、手動実行: 常に
     if: >-
-      vars.CODING_AGENT_ENABLED == 'true' &&
-      (github.event_name != 'push' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+      vars.CODING_AGENT_ENABLED == 'true' && (
+        github.event_name == 'workflow_dispatch' ||
+        github.event_name == 'pull_request_target' ||
+        (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
+        (github.event_name == 'issues' && (
+          github.event.action == 'assigned' ||
+          github.event.action == 'closed' ||
+          contains(github.event.issue.labels.*.name, 'feature')
+        ))
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # 同じ Issue や PR のイベントは 1 つずつ処理する (段階の Issue を二重に作らないため)。
