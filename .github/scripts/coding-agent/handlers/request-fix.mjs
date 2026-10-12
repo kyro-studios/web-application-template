@@ -1,22 +1,29 @@
 /**
- * 修正の依頼: レビュー担当が差し戻した PR の修正を、PR を作ったエージェントに依頼する。
+ * 修正の依頼: PR の今の head に修正が必要な理由があれば、PR を作ったエージェントに修正を依頼する。
  *
- * レビュー担当のワークフローは、差し戻しを投稿したら、PR の番号を指定して振り分け用のワークフローを手動実行する。
- * pull_request_review イベントを使わないのは、そのイベントでは PR のブランチのワークフローとスクリプトが動き、
- * PR の変更で振り分けの処理を書き換えられてしまうため。人が PR の番号を指定して手動実行しても、同じように処理する。
+ * 修正が必要な理由は、次の 2 つ。今の head に対する理由をすべて集めて、1 回の修正でまとめて直させる (仕様の 9.1)。
+ * - レビュー担当の差し戻し: その段階のレビュー担当の最新のレビューが、今の head に対する差し戻し (Request changes)
+ * - コンフリクト: 既定ブランチとコンフリクトしている。修正では、既定ブランチの最新のコミットを取り込んで解消させる
+ *
+ * レビュー担当のワークフローは差し戻しを投稿したら、コンフリクトの検知 (detect-conflicts.mjs) はコンフリクトを
+ * 見つけたら、PR の番号を指定して振り分け用のワークフローを手動実行する。pull_request_review イベントを使わないのは、
+ * そのイベントでは PR のブランチのワークフローとスクリプトが動き、PR の変更で振り分けの処理を書き換えられてしまうため。
+ * 人が PR の番号を指定して手動実行しても、同じように処理する。
  *
  * 次のすべてを満たすときに、修正を依頼する。
  * - 仕組みで扱う PR (Draft でなく、needs-human ラベルが無いなど) で、その段階のレビュー担当以外の登録済みのエージェントが作った
- * - レビュー担当の最新のレビューが差し戻し (Request changes) で、今の head に対するもの
- * - そのレビューについて、まだ修正を依頼していない (force を指定した手動実行では依頼し直す)
+ * - 修正が必要な理由があり、その理由 (レビュー、または取り込む既定ブランチのコミット) について、まだ修正を依頼していない
+ *   (force を指定した手動実行では依頼し直す)
  *
  * 修正は、PR を作ったエージェントが、エージェントごとの修正のモデルと effort (agents.json の agents.<id>.fix) で行う。
  * エージェントが修正した回数が上限に達していたら、修正を依頼せずに、needs-human ラベルを付けて人に引き継ぐ。
+ * コンフリクトの修正も、修正の回数に数える。
  */
 
 import { isTrustedActor } from '../actors.mjs';
 import { findAgentByBot, fixExecution, getReviewer, isCoordinator } from '../config.mjs';
-import { listReviewsBy } from '../github-pulls.mjs';
+import { getMergeableState, listReviewsBy } from '../github-pulls.mjs';
+import { CONFLICTING_STATE, mergeableStateOptions } from './detect-conflicts.mjs';
 import { NEEDS_HUMAN_LABEL, resolveStageContext, unhandledReason } from '../stage-context.mjs';
 
 /**
@@ -38,6 +45,16 @@ export const DEFAULT_MAX_FIX_ROUNDS = 3;
  */
 export function fixRequestMarker(reviewId) {
   return `<!-- coding-agent-fix-request:${reviewId} -->`;
+}
+
+/**
+ * 既定ブランチのコミットを取り込んでコンフリクトの解消を依頼したときに、進行役の App が PR のコメントに埋め込む印を返す。
+ *
+ * @param {string} baseSha 取り込む既定ブランチのコミット
+ * @returns {string}
+ */
+export function conflictFixRequestMarker(baseSha) {
+  return `<!-- coding-agent-conflict-fix-request:${baseSha} -->`;
 }
 
 /**
@@ -125,22 +142,34 @@ export const requestFix = {
       return {};
     }
 
-    // レビュー担当の最新のレビューが、今の head に対する差し戻しのときだけ修正する
-    const latest = (await listReviewsBy(github, repository, number, reviewer.bot)).at(-1);
-    if (latest === undefined || latest.state !== 'CHANGES_REQUESTED') {
-      core.info(`#${number} はレビュー担当に差し戻されていないため、修正を依頼しません`);
-      return {};
-    }
-    if (latest.commitId !== pullRequest.head.sha) {
-      core.info(`#${number} は差し戻しの後に更新されているため、修正を依頼しません (新しいコミットのレビューを待ちます)`);
-      return {};
-    }
-
     /** @type {{ user: { login: string } | null, body?: string }[]} */
     const comments = await github.paginate(github.rest.issues.listComments, { ...repository, issue_number: number, per_page: 100 });
-    const marker = fixRequestMarker(latest.id);
-    if (!force && comments.some((comment) => isCoordinator(config.agents, comment.user?.login) && comment.body?.includes(marker))) {
+    /** @param {string} marker */
+    const requested = (marker) => !force && comments.some((comment) => isCoordinator(config.agents, comment.user?.login) && comment.body?.includes(marker));
+
+    // 理由 1: レビュー担当の最新のレビューが、今の head に対する差し戻し (差し戻しの後に更新されていれば、新しいコミットのレビューを待つ)
+    const latest = (await listReviewsBy(github, repository, number, reviewer.bot)).at(-1);
+    const review = latest !== undefined && latest.state === 'CHANGES_REQUESTED' && latest.commitId === pullRequest.head.sha ? latest : undefined;
+    if (review !== undefined && requested(fixRequestMarker(review.id))) {
       core.notice(`#${number} のこのレビューについては、修正を依頼済みです (依頼し直す場合は、force を有効にして手動実行してください)`);
+    }
+    const reviewToFix = review !== undefined && !requested(fixRequestMarker(review.id)) ? review : undefined;
+
+    // 理由 2: 既定ブランチとのコンフリクト。取り込む既定ブランチのコミットごとに、一度だけ依頼する
+    /** @type {{ baseSha: string } | undefined} */
+    let conflict;
+    if ((await getMergeableState(github, repository, number, mergeableStateOptions)) === CONFLICTING_STATE) {
+      const defaultBranch = /** @type {string} */ (context.payload.repository?.default_branch);
+      const { data: branch } = await github.rest.repos.getBranch({ ...repository, branch: defaultBranch });
+      if (requested(conflictFixRequestMarker(branch.commit.sha))) {
+        core.notice(`#${number} は、${defaultBranch} のこのコミットとのコンフリクトの解消を依頼済みです (依頼し直す場合は、force を有効にして手動実行してください)`);
+      } else {
+        conflict = { baseSha: branch.commit.sha };
+      }
+    }
+
+    if (reviewToFix === undefined && conflict === undefined) {
+      core.info(`#${number} は、今の head に対して修正が必要な理由が無いため、修正を依頼しません (差し戻しもコンフリクトも無いか、依頼済みです)`);
       return {};
     }
 
@@ -159,17 +188,22 @@ export const requestFix = {
         body: [
           `🤖 ${author.name} による修正が上限の ${max} 回に達したため、自動の修正を止めて人に引き継ぎます。`,
           '',
-          `${owner === undefined ? '' : `@${owner} `}レビューの指摘を確認して対応してください。対応が終わったら \`${NEEDS_HUMAN_LABEL}\` ラベルを外してください。外すと、改めてレビューし、修正の回数を数え直します。`,
+          `${owner === undefined ? '' : `@${owner} `}レビューの指摘やコンフリクトを確認して対応してください。対応が終わったら \`${NEEDS_HUMAN_LABEL}\` ラベルを外してください。外すと、改めてレビューし、修正の回数を数え直します。`,
         ].join('\n'),
       });
       core.notice(`#${number} の修正の回数が上限 (${max} 回) に達したため、人に引き継ぎました`);
       return {};
     }
 
+    const reasons = [...(reviewToFix === undefined ? [] : ['レビューの指摘']), ...(conflict === undefined ? [] : ['既定ブランチとのコンフリクト'])];
+    const markers = [
+      ...(reviewToFix === undefined ? [] : [fixRequestMarker(reviewToFix.id)]),
+      ...(conflict === undefined ? [] : [conflictFixRequestMarker(conflict.baseSha)]),
+    ];
     await github.rest.issues.createComment({
       ...repository,
       issue_number: number,
-      body: `🤖 ${author.name} に、レビューの指摘の修正を依頼しました (${rounds + 1} 回目 / 上限 ${max} 回)。\n\n${marker}`,
+      body: `🤖 ${author.name} に、修正を依頼しました (理由: ${reasons.join('、')}。${rounds + 1} 回目 / 上限 ${max} 回)。\n\n${markers.join('\n')}`,
     });
     core.info(`#${number} の修正を ${author.name} に依頼します (${rounds + 1} 回目)`);
 
@@ -192,7 +226,8 @@ export const requestFix = {
             artifact,
             documents,
             allowedFiles,
-            review: { id: latest.id, body: latest.body, comments: latest.comments },
+            review: reviewToFix === undefined ? null : { id: reviewToFix.id, body: reviewToFix.body, comments: reviewToFix.comments },
+            conflict: conflict ?? null,
             fixRound: rounds + 1,
             maxFixRounds: max,
           },

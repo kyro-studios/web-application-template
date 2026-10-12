@@ -87,6 +87,14 @@ export function createFakeGitHub({ actor, permissions = {} }) {
   };
 
   const pullsApi = {
+    /** @param {{ state?: string }} params */
+    list: async ({ state = 'open' }) => ({
+      data: structuredClone(
+        [...pulls.entries()]
+          .filter(([, pull]) => state === 'all' || (pull.detail?.state ?? 'open') === state)
+          .map(([number, pull]) => ({ ...pull.detail, labels: issues.get(number)?.labels ?? [], number })),
+      ),
+    }),
     /** @param {{ pull_number: number }} params */
     get: async ({ pull_number }) => {
       const issue = issues.get(pull_number);

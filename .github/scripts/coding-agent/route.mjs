@@ -29,6 +29,7 @@
 import { toDispatch, validateRequest, writeRequest } from './agent-request.mjs';
 import { ConfigError, getAgent, loadConfig } from './config.mjs';
 import { closeParent } from './handlers/close-parent.mjs';
+import { detectConflicts } from './handlers/detect-conflicts.mjs';
 import { launchStage, wakeWaitingStages } from './handlers/launch-stage.mjs';
 import { requestFix } from './handlers/request-fix.mjs';
 import { requestReview } from './handlers/request-review.mjs';
@@ -67,7 +68,7 @@ import { startFeature } from './handlers/start-feature.mjs';
  * イベントごとの処理。作る順番に沿って追加していく。
  * @type {readonly Handler[]}
  */
-export const HANDLERS = [startFeature, closeParent, wakeWaitingStages, launchStage, requestReview, requestFix];
+export const HANDLERS = [startFeature, closeParent, wakeWaitingStages, launchStage, requestReview, requestFix, detectConflicts];
 
 /**
  * イベントから、ハンドラーを探すためのキーを作る。
