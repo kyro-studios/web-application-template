@@ -39,8 +39,10 @@ import { IMPLEMENTATION_STAGE } from './stages.mjs';
 
 /**
  * 依頼の種類と段階に応じて、読み込む指示のファイル (prompts/ からの相対パス) を返す。
- * - 作成: 共通の指示に、段階の種類ごとの指示を続ける。文書の段階は、文書に共通する指示と段階ごとの指示を続ける
- * - 修正: 修正に共通する指示に、段階ごとの作成の指示を参考として続ける
+ * - 作成: 共通の指示に、段階の種類ごとの指示を続ける。文書の段階は、文書に共通する指示と段階ごとの指示を続ける。
+ *   実装タスクは、実装の指示と、作成のときの出力の指示を続ける
+ * - 修正: 修正に共通する指示に、段階ごとの作成の指示を参考として続ける。出力の指示は修正に共通する指示にあるため、
+ *   作成のときの出力の指示は含めない
  *
  * @param {'create' | 'fix'} mode
  * @param {string} stage
@@ -50,8 +52,11 @@ export function promptFiles(mode, stage) {
   if (mode === 'fix') {
     return ['fix/common.md', `create/${stage}.md`];
   }
-  if (stage === 'planning' || stage === IMPLEMENTATION_STAGE) {
-    return ['create/common.md', `create/${stage}.md`];
+  if (stage === 'planning') {
+    return ['create/common.md', 'create/planning.md'];
+  }
+  if (stage === IMPLEMENTATION_STAGE) {
+    return ['create/common.md', 'create/implementation.md', 'create/implementation-output.md'];
   }
   return ['create/common.md', 'create/documents.md', `create/${stage}.md`];
 }

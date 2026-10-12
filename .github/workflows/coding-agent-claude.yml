@@ -47,7 +47,8 @@ jobs:
     name: Claude による作業
     if: vars.CODING_AGENT_ENABLED == 'true' && (inputs.mode == 'create' || inputs.mode == 'fix')
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # 実装タスクでは、ビルドやテストを実行するため、時間の上限を長くする
+    timeout-minutes: ${{ inputs.stage == 'implementation' && 90 || 60 }}
     # 作成担当には書き込み権限を持つトークンを渡さない (push と PR の作成は publish ジョブが行う)
     permissions:
       contents: read
@@ -107,16 +108,25 @@ jobs:
           model="$(jq -r --arg agent "$agent" '.agents[$agent].model // ""' "$TRUSTED/.github/coding-agent/agents.json")"
           echo "agent=$agent" >> "$GITHUB_OUTPUT"
           echo "model-args=$([ -n "$model" ] && printf -- '--model %s' "$model")" >> "$GITHUB_OUTPUT"
-          # 実装計画は、ファイルを変更せずに計画を出力する。それ以外は、ファイルを変更してコミットメッセージなどを出力する
-          if [ "$(jq -r '.stage' "$request")" = 'planning' ]; then
-            echo "kind=planning" >> "$GITHUB_OUTPUT"
-            echo "tools=Read,Glob,Grep" >> "$GITHUB_OUTPUT"
-            echo "output-schema=$(jq -c . "$TRUSTED/.github/coding-agent/plan-schema.json")" >> "$GITHUB_OUTPUT"
-          else
-            echo "kind=change" >> "$GITHUB_OUTPUT"
-            echo "tools=Read,Edit,Write,Glob,Grep" >> "$GITHUB_OUTPUT"
-            echo "output-schema=$(jq -c . "$TRUSTED/.github/coding-agent/result-schema.json")" >> "$GITHUB_OUTPUT"
-          fi
+          # 実装計画は、ファイルを変更せずに計画を出力する。それ以外は、ファイルを変更してコミットメッセージなどを出力する。
+          # 実装タスクでは、ビルドやテストを確かめられるよう、コマンドの実行 (Bash) も許可する
+          case "$(jq -r '.stage' "$request")" in
+            planning)
+              echo "kind=planning" >> "$GITHUB_OUTPUT"
+              echo "tools=Read,Glob,Grep" >> "$GITHUB_OUTPUT"
+              echo "output-schema=$(jq -c . "$TRUSTED/.github/coding-agent/plan-schema.json")" >> "$GITHUB_OUTPUT"
+              ;;
+            implementation)
+              echo "kind=change" >> "$GITHUB_OUTPUT"
+              echo "tools=Read,Edit,Write,Glob,Grep,Bash" >> "$GITHUB_OUTPUT"
+              echo "output-schema=$(jq -c . "$TRUSTED/.github/coding-agent/result-schema.json")" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "kind=change" >> "$GITHUB_OUTPUT"
+              echo "tools=Read,Edit,Write,Glob,Grep" >> "$GITHUB_OUTPUT"
+              echo "output-schema=$(jq -c . "$TRUSTED/.github/coding-agent/result-schema.json")" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
 
       - name: 作業の指示を作る
         id: prompt
@@ -139,13 +149,18 @@ jobs:
       - name: Claude Code で作業する
         id: claude
         uses: anthropics/claude-code-action@v1
+        env:
+          # Bash などの子プロセスの環境変数から、API キーなどの認証情報を取り除く (Claude Code 本体は API の呼び出しに使い続ける)。
+          # GITHUB_TOKEN は取り除かれないため、ジョブの permissions を読み取りだけにしている
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1'
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           # 読み取り専用の GITHUB_TOKEN を渡し、Claude GitHub App の書き込み可能なトークンを使わせない
           github_token: ${{ github.token }}
           # 振り分け用のワークフロー (github-actions[bot]) からの手動実行を許可する
           allowed_bots: github-actions
-          # 文書の段階ではファイルを読み書きするだけ、実装計画では読むだけで、コマンドは実行しない
+          # 文書の段階ではファイルを読み書きするだけ、実装計画では読むだけで、コマンドは実行しない。
+          # 実装タスクでは、コマンドも実行する
           claude_args: >-
             --allowedTools "${{ steps.request.outputs.tools }}"
             --json-schema '${{ steps.request.outputs.output-schema }}'
