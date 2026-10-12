@@ -65,7 +65,7 @@ jobs:
         with:
           ref: ${{ inputs.target-sha }}
           # 修正では、コンフリクトの解消のために既定ブランチを取り込むことがあるため、履歴をすべて取得する
-          fetch-depth: ${{ inputs.mode == 'fix' && 0 || 1 }}
+          fetch-depth: ${{ inputs.mode == 'fix' && '0' || '1' }}
           persist-credentials: false
 
       # 指示やスクリプトは既定ブランチのものを使い、作業ディレクトリの外に置く (変更内容に含めないため)

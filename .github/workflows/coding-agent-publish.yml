@@ -97,7 +97,7 @@ jobs:
           ref: ${{ inputs.target-sha }}
           token: ${{ steps.app-token.outputs.token }}
           # コンフリクトの修正では、マージのために共通の祖先が要るため、履歴をすべて取得する
-          fetch-depth: ${{ inputs.merge-sha != '' && 0 || 1 }}
+          fetch-depth: ${{ inputs.merge-sha != '' && '0' || '1' }}
 
       - name: エージェントの作業結果を取得する
         uses: actions/download-artifact@v8
