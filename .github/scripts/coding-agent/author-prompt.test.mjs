@@ -90,6 +90,33 @@ describe('buildFixPrompt', () => {
   });
 });
 
+describe('buildFixPrompt (コンフリクト)', () => {
+  it('コンフリクトだけの修正では、解消の指示とコンフリクトしたファイルを含め、レビューの所見は含めない', () => {
+    const prompt = buildFixPrompt({
+      prompts: ['修正の指示\n', '仕様書の指示\n', 'コンフリクトの指示\n'],
+      request: {
+        ...baseRequest,
+        id: 'fix-pr-8-0123456',
+        mode: 'fix',
+        pullRequestNumber: 8,
+        materials: {
+          ...materials,
+          pullRequest: { number: 8, title: 'docs: 仕様書を追加する', body: 'Closes #3', headRef: 'coding-agent/claude/issue-3-1' },
+          review: null,
+          conflict: { baseSha: '0123456789abcdef0123456789abcdef01234567', files: ['docs/features/1-login/specification.md'] },
+          fixRound: 1,
+          maxFixRounds: 3,
+        },
+      },
+    });
+
+    assert.match(prompt, /^修正の指示\n\nコンフリクトの指示\n\n## 参考: この段階の成果物に求められること/);
+    assert.match(prompt, /- 修正の理由: 既定ブランチとのコンフリクト\n/);
+    assert.match(prompt, /### コンフリクトしたファイル\n\n- `docs\/features\/1-login\/specification\.md`/);
+    assert.doesNotMatch(prompt, /レビューの所見/);
+  });
+});
+
 describe('promptFiles', () => {
   it('依頼の種類と段階の種類ごとに、読み込む指示のファイルを決める', () => {
     assert.deepEqual(promptFiles('create', 'specification'), ['create/common.md', 'create/documents.md', 'create/specification.md']);
@@ -98,6 +125,8 @@ describe('promptFiles', () => {
     assert.deepEqual(promptFiles('fix', 'architecture'), ['fix/common.md', 'create/architecture.md']);
     // 修正では、作成のときの出力の指示を含めない
     assert.deepEqual(promptFiles('fix', 'implementation'), ['fix/common.md', 'create/implementation.md']);
+    // コンフリクトの修正では、解消の指示を加える
+    assert.deepEqual(promptFiles('fix', 'implementation', { conflict: true }), ['fix/common.md', 'create/implementation.md', 'fix/conflict.md']);
   });
 
   it('起動できる段階で読み込む指示のファイルが、すべてある', async () => {
@@ -107,7 +136,7 @@ describe('promptFiles', () => {
       ...(await readdir(new URL('fix/', promptsDir))).map((file) => `fix/${file}`),
     ]);
     for (const stage of CREATABLE_STAGES) {
-      for (const file of [...promptFiles('create', stage), ...(stage === 'planning' ? [] : promptFiles('fix', stage))]) {
+      for (const file of [...promptFiles('create', stage), ...(stage === 'planning' ? [] : promptFiles('fix', stage, { conflict: true }))]) {
         assert.ok(files.has(file), file);
       }
     }

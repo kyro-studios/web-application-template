@@ -6,6 +6,8 @@ on:
   # 振り分けの処理は既定ブランチのものを使い、PR のコードは実行しない (PR の変更で振り分けを書き換えられないようにする)
   pull_request_target:
     types: [opened, reopened, ready_for_review, synchronize, unlabeled]
+  # 既定ブランチが更新されたら、エージェントの PR がコンフリクトしていないか調べる (既定ブランチ以外の push はジョブの if で除く)
+  push:
   workflow_dispatch:
     inputs:
       issue-number:
@@ -23,14 +25,17 @@ permissions: {}
 jobs:
   route:
     name: 振り分け
-    # テンプレート自体や、セットアップ前のリポジトリでは、ランナーを起動せずに終える
-    if: vars.CODING_AGENT_ENABLED == 'true'
+    # テンプレート自体や、セットアップ前のリポジトリでは、ランナーを起動せずに終える。
+    # push は、既定ブランチへのものだけを処理する (エージェントのブランチへの push では、ランナーを起動しない)
+    if: >-
+      vars.CODING_AGENT_ENABLED == 'true' &&
+      (github.event_name != 'push' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # 同じ Issue や PR のイベントは 1 つずつ処理する (段階の Issue を二重に作らないため)。
-    # PR は新しい push があれば古いものを取り消し、最新のコミットだけをレビューに回す
+    # PR は新しい push があれば古いものを取り消し、最新のコミットだけをレビューに回す。既定ブランチへの push は 1 つずつ処理する
     concurrency:
-      group: coding-agent-router-${{ github.event.issue.number || github.event.pull_request.number || inputs.issue-number }}
+      group: coding-agent-router-${{ github.event.issue.number || github.event.pull_request.number || inputs.issue-number || 'push' }}
       cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
     permissions:
       contents: read

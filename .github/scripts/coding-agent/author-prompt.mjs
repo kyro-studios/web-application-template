@@ -4,7 +4,9 @@
  * 指示の本文は、既定ブランチの .github/coding-agent/prompts/ から読む (promptFiles を参照)。
  *
  * 使い方 (作成担当のワークフローから実行する):
- *   node author-prompt.mjs --request <依頼の JSON> --prompts <指示のディレクトリ> --prompt-out <指示の出力先>
+ *   node author-prompt.mjs --request <依頼の JSON> --prompts <指示のディレクトリ> --prompt-out <指示の出力先> [--conflicts <ファイル>]
+ *
+ * --conflicts には、既定ブランチを取り込んでコンフリクトしたファイルの一覧 (1 行に 1 つ) を渡す (コンフリクトの修正のみ)。
  */
 
 import { readFile, writeFile } from 'node:fs/promises';
@@ -31,7 +33,8 @@ import { IMPLEMENTATION_STAGE } from './stages.mjs';
  * 修正の依頼の資料 (handlers/request-fix.mjs が作る)
  * @typedef {CreateMaterials & {
  *   pullRequest: { number: number, title: string, body: string, headRef: string },
- *   review: { id: number, body: string, comments: { path: string, line: number | null, body: string }[] },
+ *   review: { id: number, body: string, comments: { path: string, line: number | null, body: string }[] } | null,
+ *   conflict: { baseSha: string, files?: string[] } | null,
  *   fixRound: number,
  *   maxFixRounds: number,
  * }} FixMaterials
@@ -42,15 +45,16 @@ import { IMPLEMENTATION_STAGE } from './stages.mjs';
  * - 作成: 共通の指示に、段階の種類ごとの指示を続ける。文書の段階は、文書に共通する指示と段階ごとの指示を続ける。
  *   実装タスクは、実装の指示と、作成のときの出力の指示を続ける
  * - 修正: 修正に共通する指示に、段階ごとの作成の指示を参考として続ける。出力の指示は修正に共通する指示にあるため、
- *   作成のときの出力の指示は含めない
+ *   作成のときの出力の指示は含めない。コンフリクトの修正では、コンフリクトの解消の指示を加える
  *
  * @param {'create' | 'fix'} mode
  * @param {string} stage
+ * @param {{ conflict?: boolean }} [options]
  * @returns {string[]}
  */
-export function promptFiles(mode, stage) {
+export function promptFiles(mode, stage, { conflict = false } = {}) {
   if (mode === 'fix') {
-    return ['fix/common.md', `create/${stage}.md`];
+    return ['fix/common.md', `create/${stage}.md`, ...(conflict ? ['fix/conflict.md'] : [])];
   }
   if (stage === 'planning') {
     return ['create/common.md', 'create/planning.md'];
@@ -137,11 +141,14 @@ export function buildCreatePrompt({ request, prompts }) {
  * @returns {string}
  */
 export function buildFixPrompt({ request, prompts }) {
-  const [common, stagePrompt] = prompts;
-  const { pullRequest, review, fixRound, maxFixRounds } = request.materials;
-  const lines = [
-    common.trim(),
-    '',
+  const [common, stagePrompt, conflictPrompt] = prompts;
+  const { pullRequest, review, conflict, fixRound, maxFixRounds } = request.materials;
+  const reasons = [...(review ? ['レビューの指摘'] : []), ...(conflict ? ['既定ブランチとのコンフリクト'] : [])];
+  const lines = [common.trim(), ''];
+  if (conflict && conflictPrompt !== undefined) {
+    lines.push(conflictPrompt.trim(), '');
+  }
+  lines.push(
     '## 参考: この段階の成果物に求められること',
     '',
     stagePrompt.trim(),
@@ -149,17 +156,22 @@ export function buildFixPrompt({ request, prompts }) {
     '## 依頼の内容',
     '',
     `- PR: #${pullRequest.number} ${pullRequest.title}`,
+    `- 修正の理由: ${reasons.join('、')}`,
     `- 修正の回数: ${fixRound} 回目 (上限 ${maxFixRounds} 回)`,
     ...requestLines(request),
-    '',
-    '### レビューの所見',
-    '',
-    fence(review.body),
-  ];
-  if (review.comments.length > 0) {
-    lines.push('', '### 行への指摘');
-    for (const comment of review.comments) {
-      lines.push('', `- \`${comment.path}\`${comment.line === null ? '' : ` の ${comment.line} 行目`}:`, '', fence(comment.body));
+  );
+  if (conflict) {
+    const files = conflict.files ?? [];
+    lines.push('', '### コンフリクトしたファイル', '');
+    lines.push(...(files.length === 0 ? ['(ありません。取り込んだ時点で、自動でマージできました)'] : files.map((file) => `- \`${file}\``)));
+  }
+  if (review) {
+    lines.push('', '### レビューの所見', '', fence(review.body));
+    if (review.comments.length > 0) {
+      lines.push('', '### 行への指摘');
+      for (const comment of review.comments) {
+        lines.push('', `- \`${comment.path}\`${comment.line === null ? '' : ` の ${comment.line} 行目`}:`, '', fence(comment.body));
+      }
     }
   }
   lines.push(...issueBodyLines(request.materials));
@@ -176,6 +188,7 @@ async function main(args) {
       request: { type: 'string' },
       prompts: { type: 'string' },
       'prompt-out': { type: 'string' },
+      conflicts: { type: 'string' },
     },
     strict: true,
   });
@@ -189,8 +202,14 @@ async function main(args) {
   if (request.mode !== 'create' && request.mode !== 'fix') {
     throw new Error(`作成や修正の依頼ではありません: ${request.mode}`);
   }
+  const conflict = request.mode === 'fix' ? request.materials.conflict : null;
+  if (conflict && values.conflicts !== undefined) {
+    // コンフリクトしたファイルは、既定ブランチを取り込んだ作成担当のワークフローが求める
+    conflict.files = (await readFile(values.conflicts, 'utf8')).split('\n').filter((line) => line.trim() !== '');
+  }
   const promptsDir = /** @type {string} */ (values.prompts);
-  const prompts = await Promise.all(promptFiles(request.mode, request.stage).map((file) => readFile(join(promptsDir, file), 'utf8')));
+  const files = promptFiles(request.mode, request.stage, { conflict: Boolean(conflict) });
+  const prompts = await Promise.all(files.map((file) => readFile(join(promptsDir, file), 'utf8')));
   const build = request.mode === 'fix' ? buildFixPrompt : buildCreatePrompt;
   await writeFile(/** @type {string} */ (values['prompt-out']), build({ request, prompts }));
   console.log(request.mode === 'fix' ? '修正の指示を作成しました' : '作成の指示を作成しました');

@@ -89,3 +89,29 @@ export async function listReviewsBy(github, repository, pullRequestNumber, login
       .map((comment) => ({ path: comment.path, line: comment.line ?? null, body: comment.body })),
   }));
 }
+
+/**
+ * PR をマージできるかどうか (mergeable_state) を取得する。GitHub は、マージできるかどうかを裏で計算するため、
+ * 計算が終わっていなければ (mergeable が null なら)、間を空けて取得し直す。
+ *
+ * @param {GitHub} github
+ * @param {Repository} repository
+ * @param {number} pullRequestNumber
+ * @param {object} [options]
+ * @param {number} [options.attempts] 取得する回数の上限
+ * @param {number} [options.intervalMs] 取得し直すまでの間隔
+ * @returns {Promise<string>} mergeable_state (コンフリクトしていれば 'dirty')。計算が終わらなければ 'unknown'
+ */
+export async function getMergeableState(github, repository, pullRequestNumber, { attempts = 6, intervalMs = 10_000 } = {}) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    /** @type {{ data: { mergeable?: boolean | null, mergeable_state?: string } }} */
+    const { data } = await github.rest.pulls.get({ ...repository, pull_number: pullRequestNumber });
+    if (data.mergeable !== null && data.mergeable !== undefined) {
+      return data.mergeable_state ?? 'unknown';
+    }
+    if (attempt < attempts) {
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  }
+  return 'unknown';
+}
