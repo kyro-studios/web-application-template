@@ -40,6 +40,7 @@ function createRequest(overrides = {}) {
     issueNumber: 12,
     pullRequestNumber: null,
     targetSha: SHA,
+    execution: { model: null, effort: null },
     materials: {},
     ...overrides,
   };

@@ -6,15 +6,16 @@
  * PR の変更で振り分けの処理を書き換えられてしまうため。人が PR の番号を指定して手動実行しても、同じように処理する。
  *
  * 次のすべてを満たすときに、修正を依頼する。
- * - 仕組みで扱う PR (Draft でなく、needs-human ラベルが無いなど) で、レビュー担当以外の登録済みのエージェントが作った
+ * - 仕組みで扱う PR (Draft でなく、needs-human ラベルが無いなど) で、その段階のレビュー担当以外の登録済みのエージェントが作った
  * - レビュー担当の最新のレビューが差し戻し (Request changes) で、今の head に対するもの
  * - そのレビューについて、まだ修正を依頼していない (force を指定した手動実行では依頼し直す)
  *
+ * 修正は、PR を作ったエージェントが、エージェントごとの修正のモデルと effort (agents.json の agents.<id>.fix) で行う。
  * エージェントが修正した回数が上限に達していたら、修正を依頼せずに、needs-human ラベルを付けて人に引き継ぐ。
  */
 
 import { isTrustedActor } from '../actors.mjs';
-import { findAgentByBot, getAgent, isCoordinator } from '../config.mjs';
+import { findAgentByBot, fixExecution, getReviewer, isCoordinator } from '../config.mjs';
 import { listReviewsBy } from '../github-pulls.mjs';
 import { NEEDS_HUMAN_LABEL, resolveStageContext, unhandledReason } from '../stage-context.mjs';
 
@@ -105,10 +106,22 @@ export const requestFix = {
       core.info(`#${number} の修正は依頼しません: ${unhandled}`);
       return {};
     }
-    const reviewer = getAgent(config.agents, config.agents.roles.reviewer);
     const author = findAgentByBot(config.agents, pullRequest.user?.login);
-    if (author === undefined || author.id === reviewer.id) {
-      core.info(`#${number} はレビュー担当以外のエージェントが作った PR ではないため、修正を依頼しません (人が作った PR は、作った人が直します)`);
+    if (author === undefined) {
+      core.info(`#${number} は登録済みのエージェントが作った PR ではないため、修正を依頼しません (人が作った PR は、作った人が直します)`);
+      return {};
+    }
+
+    // レビュー担当は段階ごとに決まるため、PR が Close する段階の Issue から割り出す
+    const resolved = await resolveStageContext({ github, repository, config, pullRequestNumber: number });
+    if ('reason' in resolved) {
+      core.info(`#${number} の修正は依頼しません: ${resolved.reason}`);
+      return {};
+    }
+    const { issue, stage, feature, featureDir, artifact, documents, allowedFiles } = resolved.context;
+    const { agent: reviewer } = getReviewer(config.agents, stage);
+    if (author.id === reviewer.id) {
+      core.info(`#${number} は「${stage}」のレビュー担当が作った PR のため、修正を依頼しません`);
       return {};
     }
 
@@ -130,13 +143,6 @@ export const requestFix = {
       core.notice(`#${number} のこのレビューについては、修正を依頼済みです (依頼し直す場合は、force を有効にして手動実行してください)`);
       return {};
     }
-
-    const resolved = await resolveStageContext({ github, repository, config, pullRequestNumber: number });
-    if ('reason' in resolved) {
-      core.info(`#${number} の修正は依頼しません: ${resolved.reason}`);
-      return {};
-    }
-    const { issue, stage, feature, featureDir, artifact, documents, allowedFiles } = resolved.context;
 
     // 修正の回数が上限に達していたら、人に引き継ぐ
     const rounds = await countFixRounds(args, number);
@@ -177,6 +183,7 @@ export const requestFix = {
           issueNumber: issue.number,
           pullRequestNumber: number,
           targetSha: pullRequest.head.sha,
+          execution: fixExecution(author),
           materials: {
             pullRequest: { number, title: pullRequest.title, body: pullRequest.body ?? '', headRef: pullRequest.head.ref },
             issue: { number: issue.number, title: issue.title, body: issue.body ?? '' },

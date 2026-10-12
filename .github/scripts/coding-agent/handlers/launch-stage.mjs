@@ -9,13 +9,13 @@
  *
  * 起動の条件は、次のすべてを満たすこと。
  * - 進行役の App が作った、Open の段階の Issue で、その段階の作成担当が Assign されている
- *   - 文書の段階と実装計画の作成担当は、agents.json の roles.author で決まる
- *   - 実装タスクの作成担当は、roles.implementers のうち、Issue に Assign されているエージェント (実装計画で割り当てたもの)
+ *   - 文書の段階と実装計画の作成担当は、agents.json の roles.<段階>.author で決まる
+ *   - 実装タスクの作成担当は、roles.implementation.implementers のうち、Issue に Assign されているエージェント (実装計画で割り当てたもの)
  * - すべての依存先 (Sub Issue と Blocked by の Issue) が Close され、紐づく PR に Open のまま残っているものが無い
  */
 
 import { isTrustedActor } from '../actors.mjs';
-import { expandStageFiles, featureDirectory, findAgentByAssignee, getAgent, isCoordinator, isValidFeatureName } from '../config.mjs';
+import { expandStageFiles, featureDirectory, findAgentByAssignee, getAuthor, getImplementers, isCoordinator, isValidFeatureName } from '../config.mjs';
 import { maxPlanTasks } from '../create-tasks.mjs';
 import { findLabeledAncestor, findUnresolvedDependencies, findWaitingIssueNumbers, measureIssueDepth } from '../github-issues.mjs';
 import { MAX_SUB_ISSUE_LEVELS } from '../plan-validation.mjs';
@@ -28,6 +28,7 @@ import { artifactPath, FEATURE_LABEL, IMPLEMENTATION_STAGE, reviewDocuments, sta
  * @typedef {import('../route.mjs').HandlerArgs} HandlerArgs
  * @typedef {import('../github-issues.mjs').RestIssue} RestIssue
  * @typedef {import('../config.mjs').CodingAgentConfig} CodingAgentConfig
+ * @typedef {import('../config.mjs').ResolvedAssignment} ResolvedAssignment
  */
 
 /** 作成担当が成果物を作る段階 */
@@ -41,7 +42,7 @@ export const LAUNCH_MARKER = '<!-- coding-agent-launch -->';
  *
  * @param {HandlerArgs} args
  * @param {RestIssue} issue
- * @returns {Promise<{ stage: typeof CREATABLE_STAGES[number], agent: import('../config.mjs').RegisteredAgent } | { reason: string }>}
+ * @returns {Promise<{ stage: typeof CREATABLE_STAGES[number], author: ResolvedAssignment } | { reason: string }>}
  */
 async function checkLaunchable({ github, context, config }, issue) {
   if (issue.state !== 'open') {
@@ -56,33 +57,31 @@ async function checkLaunchable({ github, context, config }, issue) {
   }
   const creatable = /** @type {typeof CREATABLE_STAGES[number]} */ (stage);
   const assignees = (issue.assignees ?? []).map((user) => user.login.toLowerCase());
-  /** @type {import('../config.mjs').RegisteredAgent} */
-  let agent;
+  /** @type {ResolvedAssignment} */
+  let author;
   if (creatable === IMPLEMENTATION_STAGE) {
     // 実装タスクは、実装計画で割り当てたエージェント (Assign されている実装担当) が作成する
-    const candidates = config.agents.roles.implementers
-      .map((id) => getAgent(config.agents, id))
-      .filter((implementer) => assignees.includes(implementer.assignee.toLowerCase()));
+    const candidates = getImplementers(config.agents).filter((implementer) => assignees.includes(implementer.agent.assignee.toLowerCase()));
     if (candidates.length !== 1) {
       return {
         reason:
           candidates.length === 0
             ? '実装担当のエージェントが Assign されていません (人が対応するタスクか、子タスクをまとめるタスクです)'
-            : `実装担当のエージェントが複数 Assign されています: ${candidates.map((candidate) => candidate.assignee).join('、')}`,
+            : `実装担当のエージェントが複数 Assign されています: ${candidates.map((candidate) => candidate.agent.assignee).join('、')}`,
       };
     }
-    agent = candidates[0];
+    author = candidates[0];
   } else {
-    agent = getAgent(config.agents, config.agents.roles.author[creatable]);
-    if (!assignees.includes(agent.assignee.toLowerCase())) {
-      return { reason: `作成担当 (${agent.assignee}) が Assign されていません` };
+    author = getAuthor(config.agents, creatable);
+    if (!assignees.includes(author.agent.assignee.toLowerCase())) {
+      return { reason: `作成担当 (${author.agent.assignee}) が Assign されていません` };
     }
   }
   const unresolved = await findUnresolvedDependencies(github, context.repo, issue.number);
   if (unresolved.length > 0) {
     return { reason: `依存先が解決していません: ${unresolved.join('、')}` };
   }
-  return { stage: creatable, agent };
+  return { stage: creatable, author };
 }
 
 /** @type {Handler} */
@@ -147,7 +146,8 @@ export const launchStage = {
       core.info(`#${issueNumber} は起動しません: ${result.reason}`);
       return {};
     }
-    const { stage, agent } = result;
+    const { stage, author } = result;
+    const { agent } = author;
 
     // 同じ Issue では二重に起動しない (force を指定した手動実行では起動し直す)
     /** @type {{ user: { login: string } | null, body?: string }[]} */
@@ -188,6 +188,7 @@ export const launchStage = {
           issueNumber,
           pullRequestNumber: null,
           targetSha: branch.commit.sha,
+          execution: author.execution,
           materials: {
             issue: { number: issue.number, title: issue.title, body: issue.body ?? '' },
             feature: { number: feature.number, title: feature.title, body: feature.body ?? '' },
@@ -198,7 +199,7 @@ export const launchStage = {
               ? {
                   // 実装計画はファイルを変更せず、計画から実装タスクの Issue を作る
                   allowedFiles: null,
-                  implementers: config.agents.roles.implementers.map((id) => ({ id, name: getAgent(config.agents, id).name })),
+                  implementers: getImplementers(config.agents).map((implementer) => ({ id: implementer.agent.id, name: implementer.agent.name })),
                   planLimits: {
                     maxTasks: maxPlanTasks(process.env.PLANNER_MAX_TASKS),
                     maxDepth: MAX_SUB_ISSUE_LEVELS - (await measureIssueDepth(github, repository, issueNumber)),

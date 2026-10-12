@@ -110,6 +110,8 @@ describe('requestFix', () => {
     assert.equal(request.issueNumber, specification.number);
     assert.equal(request.pullRequestNumber, PR_NUMBER);
     assert.equal(request.targetSha, HEAD_SHA);
+    // 修正は、PR を作ったエージェントの修正のモデルと effort で行う
+    assert.deepEqual(request.execution, { model: 'claude-fix-model', effort: 'low' });
     assert.equal(request.materials.pullRequest.headRef, 'coding-agent/claude/issue-2-1');
     assert.equal(request.materials.artifact, 'docs/features/1-user-login/specification.md');
     assert.deepEqual(request.materials.review, {
@@ -145,6 +147,18 @@ describe('requestFix', () => {
   it('人が作った PR や、レビュー担当が作った PR は修正しない', async () => {
     assert.deepEqual((await run(setup({ author: 'alice' }).fake)).result, {});
     assert.deepEqual((await run(setup({ author: 'codex-app[bot]' }).fake)).result, {});
+  });
+
+  it('差し戻しは、その段階のレビュー担当のものだけを見る', async () => {
+    // 仕様書のレビュー担当を claude にすると、codex の差し戻しでは修正しない
+    const original = config.agents.roles.specification;
+    config.agents.roles.specification = { author: { agent: 'codex' }, reviewer: { agent: 'claude' } };
+    try {
+      const { fake } = setup({ author: 'codex-app[bot]' });
+      assert.deepEqual((await run(fake)).result, {});
+    } finally {
+      config.agents.roles.specification = original;
+    }
   });
 
   it('PR でない番号は扱わない', async () => {

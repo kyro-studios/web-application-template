@@ -59,7 +59,7 @@ describe('parseOptions', () => {
 describe('ラベル', () => {
   it('段階の Issue に付けるラベルが、すべての段階についてそろっている', async () => {
     const config = await loadConfig(ROOT_DIR);
-    const stages = new Set([...Object.keys(config.stages.stages), ...Object.keys(config.agents.roles.author)]);
+    const stages = new Set([...Object.keys(config.stages.stages), ...Object.keys(config.agents.roles)]);
     const labels = new Set(LABELS.map((label) => label.name));
     for (const stage of stages) {
       assert.ok(labels.has(`stage:${stage}`), `stage:${stage} のラベルがありません`);

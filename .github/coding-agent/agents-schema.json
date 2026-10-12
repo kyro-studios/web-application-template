@@ -28,34 +28,47 @@
       }
     },
     "roles": {
-      "description": "段階ごとの担当",
+      "description": "段階ごとの担当と、担当が使うモデルと effort",
       "type": "object",
       "properties": {
-        "author": {
-          "description": "段階ごとの作成担当",
+        "requirements": {
+          "description": "要件定義。作成は人が行う",
           "type": "object",
           "properties": {
-            "specification": { "$ref": "#/$defs/agentId" },
-            "domain-model": { "$ref": "#/$defs/agentId" },
-            "architecture": { "$ref": "#/$defs/agentId" },
-            "planning": { "$ref": "#/$defs/agentId" }
+            "reviewer": { "$ref": "#/$defs/assignment" }
           },
-          "required": ["specification", "domain-model", "architecture", "planning"],
+          "required": ["reviewer"],
           "additionalProperties": false
         },
-        "implementers": {
-          "description": "実装計画で実装タスクに割り当ててよいエージェント",
-          "type": "array",
-          "items": { "$ref": "#/$defs/agentId" },
-          "minItems": 1,
-          "uniqueItems": true
+        "specification": { "$ref": "#/$defs/reviewedStage" },
+        "domain-model": { "$ref": "#/$defs/reviewedStage" },
+        "architecture": { "$ref": "#/$defs/reviewedStage" },
+        "planning": {
+          "description": "実装計画。レビューは無い",
+          "type": "object",
+          "properties": {
+            "author": { "$ref": "#/$defs/assignment" }
+          },
+          "required": ["author"],
+          "additionalProperties": false
         },
-        "reviewer": {
-          "description": "レビュー担当",
-          "$ref": "#/$defs/agentId"
+        "implementation": {
+          "description": "実装タスク",
+          "type": "object",
+          "properties": {
+            "implementers": {
+              "description": "実装計画で実装タスクに割り当ててよいエージェント",
+              "type": "array",
+              "items": { "$ref": "#/$defs/assignment" },
+              "minItems": 1
+            },
+            "reviewer": { "$ref": "#/$defs/assignment" }
+          },
+          "required": ["implementers", "reviewer"],
+          "additionalProperties": false
         }
       },
-      "required": ["author", "implementers", "reviewer"],
+      "required": ["requirements", "specification", "domain-model", "architecture", "planning", "implementation"],
       "additionalProperties": false
     }
   },
@@ -75,6 +88,46 @@
       "description": "GitHub App の Client ID",
       "type": "string",
       "minLength": 1
+    },
+    "model": {
+      "description": "使うモデル。省略するか null なら、エージェントのツールの既定",
+      "type": ["string", "null"],
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$"
+    },
+    "effort": {
+      "description": "使う effort (推論の深さ)。指定できる値はエージェントのツールとモデルによる。省略するか null なら、ツールの既定",
+      "type": ["string", "null"],
+      "pattern": "^[a-z]{1,20}$"
+    },
+    "execution": {
+      "description": "モデルと effort",
+      "type": "object",
+      "properties": {
+        "model": { "$ref": "#/$defs/model" },
+        "effort": { "$ref": "#/$defs/effort" }
+      },
+      "additionalProperties": false
+    },
+    "assignment": {
+      "description": "担当のエージェントと、そのエージェントが使うモデルと effort",
+      "type": "object",
+      "properties": {
+        "agent": { "$ref": "#/$defs/agentId" },
+        "model": { "$ref": "#/$defs/model" },
+        "effort": { "$ref": "#/$defs/effort" }
+      },
+      "required": ["agent"],
+      "additionalProperties": false
+    },
+    "reviewedStage": {
+      "description": "作成担当とレビュー担当がいる文書の段階",
+      "type": "object",
+      "properties": {
+        "author": { "$ref": "#/$defs/assignment" },
+        "reviewer": { "$ref": "#/$defs/assignment" }
+      },
+      "required": ["author", "reviewer"],
+      "additionalProperties": false
     },
     "agent": {
       "type": "object",
@@ -96,10 +149,9 @@
           "pattern": "^[A-Za-z0-9._-]+\\.ya?ml$"
         },
         "appClientId": { "$ref": "#/$defs/appClientId" },
-        "model": {
-          "description": "エージェントが使うモデル。null ならエージェントの既定",
-          "type": ["string", "null"],
-          "minLength": 1
+        "fix": {
+          "description": "このエージェントが作った PR を修正するときのモデルと effort (どの段階でも同じ)",
+          "$ref": "#/$defs/execution"
         }
       },
       "required": ["name", "assignee", "bot", "workflow", "appClientId"],

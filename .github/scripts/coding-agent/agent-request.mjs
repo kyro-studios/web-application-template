@@ -27,6 +27,7 @@ import { join } from 'node:path';
  * @property {number} issueNumber 対象の Issue の番号
  * @property {number | null} pullRequestNumber 修正やレビューの対象の PR の番号 (作成のときは null)
  * @property {string} targetSha 作業を始めるコミット (レビューのときは、レビューする PR の head)
+ * @property {{ model: string | null, effort: string | null }} execution 担当が使うモデルと effort (null ならツールの既定)
  * @property {Record<string, unknown>} materials エージェントに渡す資料
  */
 
@@ -52,6 +53,12 @@ const MODES = new Set(['create', 'fix', 'review']);
 const STAGES = new Set(['requirements', 'specification', 'domain-model', 'architecture', 'planning', 'implementation']);
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
+
+/** モデルの形式 (ワークフローでコマンドの引数に渡すため、使える文字を絞る。agents-schema.json と同じ) */
+const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/;
+
+/** effort の形式 (agents-schema.json と同じ) */
+const EFFORT_PATTERN = /^[a-z]{1,20}$/;
 
 /**
  * 依頼の形式を検証する。
@@ -82,6 +89,13 @@ export function validateRequest(request) {
   }
   if (!SHA_PATTERN.test(request.targetSha)) {
     errors.push(`作業を始めるコミットの SHA が正しくありません: "${request.targetSha}"`);
+  }
+  const execution = request.execution ?? {};
+  if (!(execution.model === null || (typeof execution.model === 'string' && MODEL_PATTERN.test(execution.model)))) {
+    errors.push(`モデルの形式が正しくありません: "${execution.model}"`);
+  }
+  if (!(execution.effort === null || (typeof execution.effort === 'string' && EFFORT_PATTERN.test(execution.effort)))) {
+    errors.push(`effort の形式が正しくありません: "${execution.effort}"`);
   }
   return errors;
 }
