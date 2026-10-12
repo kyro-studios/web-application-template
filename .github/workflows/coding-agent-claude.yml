@@ -146,13 +146,37 @@ jobs:
             echo "$delimiter"
           } >> "$GITHUB_OUTPUT"
 
+      # 子プロセスの環境変数から認証情報を取り除く設定 (次のステップ) には、bubblewrap が必要
+      - name: コマンドを隔離する bubblewrap を用意する
+        if: inputs.stage == 'implementation'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q
+          sudo apt-get install -y -q bubblewrap
+          # Ubuntu 24.04 以降では、AppArmor の既定の設定で、bubblewrap がユーザー名前空間を作れない。
+          # 制限が有効なときだけ、bubblewrap 自体に許可を与える (bubblewrap の中で動くコマンドには与えない)
+          if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = '1' ]; then
+            sudo tee /etc/apparmor.d/bwrap > /dev/null <<'EOF'
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          profile bwrap /usr/bin/bwrap flags=(unconfined) {
+            userns,
+            include if exists <local/bwrap>
+          }
+          EOF
+            sudo systemctl reload apparmor
+          fi
+          bwrap --ro-bind / / --unshare-pid true
+          echo "bubblewrap を使えることを確かめました"
+
       - name: Claude Code で作業する
         id: claude
         uses: anthropics/claude-code-action@v1
         env:
-          # Bash などの子プロセスの環境変数から、API キーなどの認証情報を取り除く (Claude Code 本体は API の呼び出しに使い続ける)。
-          # GITHUB_TOKEN は取り除かれないため、ジョブの permissions を読み取りだけにしている
-          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1'
+          # 実装タスクでは、Bash などの子プロセスの環境変数から、API キーなどの認証情報を取り除く
+          # (Claude Code 本体は API の呼び出しに使い続ける)。GITHUB_TOKEN は取り除かれないため、ジョブの permissions を読み取りだけにしている
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: ${{ inputs.stage == 'implementation' && '1' || '0' }}
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           # 読み取り専用の GITHUB_TOKEN を渡し、Claude GitHub App の書き込み可能なトークンを使わせない
