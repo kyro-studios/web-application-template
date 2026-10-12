@@ -34,6 +34,14 @@ describe('段階の定義', () => {
   });
 });
 
+describe('振り分け用のワークフローの起動の条件', () => {
+  it('機能の親 Issue のラベルで、Issue の作成と編集のときに起動するかを決める', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const workflow = await readFile(new URL('../../workflows/coding-agent-router.yml', import.meta.url), 'utf8');
+    assert.ok(workflow.includes(`contains(github.event.issue.labels.*.name, '${FEATURE_LABEL}')`));
+  });
+});
+
 describe('stageOf', () => {
   it('段階のラベルがちょうど 1 つなら、段階を返す', () => {
     assert.equal(stageOf([{ name: 'bug' }, { name: 'stage:planning' }]), 'planning');
