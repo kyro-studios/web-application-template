@@ -64,8 +64,23 @@ Organization の「Settings」→「Secrets and variables」→「Actions」で�
 | `CODING_AGENT_COORDINATOR_PRIVATE_KEY` | 進行役の App の秘密鍵 (`.pem` の中身をそのまま) |
 | `CODING_AGENT_CLAUDE_PRIVATE_KEY` | Claude 用の App の秘密鍵 |
 | `CODING_AGENT_CODEX_PRIVATE_KEY` | Codex 用の App の秘密鍵 |
-| `ANTHROPIC_API_KEY` | Anthropic の API キー |
+| `ANTHROPIC_API_KEY` | Anthropic の API キー (Claude をサブスクで動かす場合は不要) |
 | `OPENAI_API_KEY` | OpenAI の API キー |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Claude のサブスクの OAuth のトークン (Claude をサブスクで動かす場合だけ。次を参照) |
+
+### Claude をサブスクで動かす場合
+
+Claude は、API キーの代わりに、Claude の Pro や Max などのサブスクで動かせます。`CLAUDE_CODE_OAUTH_TOKEN` を登録すると、`ANTHROPIC_API_KEY` があってもサブスクが使われます。どちらで動いたかは、Claude のジョブのログの「認証の方式を確かめる」に出ます。
+
+1. 手元の端末で `claude setup-token` を実行し、ブラウザーで承認する。表示されたトークン (有効期限は 1 年) を `CLAUDE_CODE_OAUTH_TOKEN` として登録する
+2. claude.ai の設定で、使用量の枠を超えた分を支払う「追加の使用量 (extra usage)」が無効になっていることを確かめる。トークンが漏れたときに、金額の被害が出ないようにするため
+3. 有効期限が切れる前に、同じ手順で作り直して登録し直す
+
+次の点に気を付けてください。
+
+- 使用量の枠は、対話で使う Claude Code や claude.ai と共有します。エージェントが動いている間は、対話で使える量が減ります。枠の上限に達すると、Claude のジョブが失敗します。枠が回復してから、失敗したジョブを再実行してください
+- トークンは、作った人のサブスクにひも付きます。Organization の Secrets で複数のリポジトリと共有すると、すべてのリポジトリがその人の枠を使います
+- トークンも API キーと同じく、エージェントが実行するコマンドから読める状態です (仕様の 6.3)。トークンでできるのはモデルへのリクエストだけですが、漏れた疑いがあれば、トークンを失効させて作り直してください
 
 ### API キーについての注意
 
