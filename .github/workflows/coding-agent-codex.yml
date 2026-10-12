@@ -144,6 +144,8 @@ jobs:
           set -euo pipefail
           git config user.name coding-agent
           git config user.email coding-agent@users.noreply.github.com
+          # チェックアウトで SHA を指定すると、そのコミットの履歴しか取得しないため、取り込むコミットを取得する
+          git fetch --no-tags origin "$MERGE_SHA"
           # コンフリクトしても止めない。取り込みの途中の状態 (MERGE_HEAD) になっていることだけを確かめる
           git merge --no-ff --no-commit "$MERGE_SHA" || true
           if ! git rev-parse -q --verify MERGE_HEAD > /dev/null; then
