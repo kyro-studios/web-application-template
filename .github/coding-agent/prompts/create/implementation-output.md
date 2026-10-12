@@ -1,6 +1,6 @@
 ## 最終的な出力
 
-- commit_message: Conventional Commits 形式のコミットメッセージ。1 行目は、変更の内容に合う type (`feat: `、`fix: `、`test: `、`build: ` など) で始め、100 文字以内にしてください (例: `feat: 利用者登録の API を追加する`)。1 行目は PR のタイトルにもなります
+- commit_message: Conventional Commits 形式のコミットメッセージを、本文を付けずに 1 行で書いてください。変更の内容に合う type (`feat: `、`fix: `、`test: `、`build: ` など) で始め、100 文字以内にしてください (例: `feat: 利用者登録の API を追加する`)。PR のタイトルにもなります
 - pull_request_body: PR の説明を Markdown で書いてください。次の内容を含めてください
   - 実装の概要
   - 受け入れ条件ごとに、どう満たしたか

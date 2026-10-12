@@ -7,7 +7,7 @@
 
 ## 最終的な出力
 
-- commit_message: Conventional Commits 形式のコミットメッセージ。1 行目は `docs: ` で始め、100 文字以内にしてください (例: `docs: ユーザー認証の仕様書を追加する`)。1 行目は PR のタイトルにもなります
+- commit_message: Conventional Commits 形式のコミットメッセージを、本文を付けずに 1 行で書いてください。`docs: ` で始め、100 文字以内にしてください (例: `docs: ユーザー認証の仕様書を追加する`)。PR のタイトルにもなります
 - pull_request_body: PR の説明を Markdown で書いてください。次の内容を含めてください
   - 作成した成果物の概要
   - 前の段階の成果物をどう反映したか
