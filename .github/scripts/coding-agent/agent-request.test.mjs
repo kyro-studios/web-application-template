@@ -20,6 +20,7 @@ function createRequest(overrides = {}) {
     issueNumber: 12,
     pullRequestNumber: null,
     targetSha: SHA,
+    execution: { model: 'claude-haiku-5-5', effort: 'high' },
     materials: { documents: ['docs/features/10-login/requirements.md'] },
     ...overrides,
   };
@@ -30,6 +31,14 @@ describe('validateRequest', () => {
     assert.deepEqual(validateRequest(createRequest()), []);
     assert.deepEqual(validateRequest(createRequest({ mode: 'fix', pullRequestNumber: 34 })), []);
     assert.deepEqual(validateRequest(createRequest({ mode: 'review', stage: 'requirements', pullRequestNumber: 34 })), []);
+  });
+
+  it('モデルと effort は、null (ツールの既定) か、決まった形式の文字列にする', () => {
+    assert.deepEqual(validateRequest(createRequest({ execution: { model: null, effort: null } })), []);
+    assert.match(validateRequest(createRequest({ execution: { model: 'gpt; rm -rf /', effort: null } })).join('\n'), /モデルの形式/);
+    assert.match(validateRequest(createRequest({ execution: { model: null, effort: 'High' } })).join('\n'), /effort の形式/);
+    // @ts-expect-error execution の無い依頼は受け付けない
+    assert.equal(validateRequest(createRequest({ execution: undefined })).length, 2);
   });
 
   it('修正やレビューの依頼には PR の番号が必要で、作成の依頼には指定できない', () => {

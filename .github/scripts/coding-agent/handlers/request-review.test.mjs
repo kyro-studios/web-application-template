@@ -172,6 +172,34 @@ describe('requestReview.run', () => {
     assert.deepEqual(materials.violations, ['docs/features/1-user-login/architecture.md']);
   });
 
+  it('段階ごとのレビュー担当に、そのモデルと effort で依頼する', async () => {
+    const { fake, addStage } = setup();
+    fake.addPull(PR_NUMBER, { closing: [addStage('specification').number] });
+
+    const [request] = (await run(fake, createContext('opened', pullRequestPayload({ author: 'claude-app[bot]', authorType: 'Bot' })))).requests;
+
+    assert.equal(request.agent, 'codex');
+    assert.deepEqual(request.execution, { model: 'codex-model', effort: 'medium' });
+  });
+
+  it('作成担当とレビュー担当を入れ替えた段階では、その段階のレビュー担当に依頼する', async () => {
+    const original = config.agents.roles['domain-model'];
+    config.agents.roles['domain-model'] = { author: { agent: 'codex' }, reviewer: { agent: 'claude', model: 'claude-review-model', effort: 'medium' } };
+    try {
+      const { fake, addStage } = setup();
+      fake.addPull(PR_NUMBER, { closing: [addStage('domain-model').number] });
+
+      const [request] = (await run(fake, createContext('opened', pullRequestPayload({ author: 'codex-app[bot]', authorType: 'Bot' })))).requests;
+      assert.equal(request.agent, 'claude');
+      assert.deepEqual(request.execution, { model: 'claude-review-model', effort: 'medium' });
+
+      // その段階のレビュー担当が作った PR は、自分で Approve できないためレビューしない
+      assert.deepEqual((await run(fake, createContext('opened', pullRequestPayload({ author: 'claude-app[bot]', authorType: 'Bot' })))).requests, []);
+    } finally {
+      config.agents.roles['domain-model'] = original;
+    }
+  });
+
   it('レビュー担当が作った PR、書き込み権限の無い人や登録されていない Bot の PR はレビューしない', async () => {
     const { fake, addStage } = setup({ alice: 'write', bob: 'read' });
     fake.addPull(PR_NUMBER, { closing: [addStage('requirements').number] });

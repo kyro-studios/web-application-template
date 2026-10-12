@@ -16,11 +16,41 @@ import Ajv2020 from 'ajv/dist/2020.js';
  * @property {string} bot GitHub App の Bot 名 (<slug>[bot])
  * @property {string} workflow エージェントを動かすワークフローのファイル名
  * @property {string} appClientId GitHub App の Client ID
- * @property {string | null} [model] エージェントが使うモデル (null ならエージェントの既定)
+ * @property {Execution} [fix] このエージェントが作った PR を修正するときのモデルと effort
+ */
+
+/**
+ * モデルと effort。省略するか null なら、エージェントのツールの既定を使う
+ * @typedef {object} Execution
+ * @property {string | null} [model]
+ * @property {string | null} [effort]
+ */
+
+/**
+ * 担当のエージェントと、そのエージェントが使うモデルと effort
+ * @typedef {Execution & { agent: string }} Assignment
  */
 
 /**
  * @typedef {'specification' | 'domain-model' | 'architecture' | 'planning'} AuthoredStage
+ */
+
+/**
+ * 段階ごとの担当
+ * @typedef {object} Roles
+ * @property {{ reviewer: Assignment }} requirements
+ * @property {{ author: Assignment, reviewer: Assignment }} specification
+ * @property {{ author: Assignment, reviewer: Assignment }} domain-model
+ * @property {{ author: Assignment, reviewer: Assignment }} architecture
+ * @property {{ author: Assignment }} planning
+ * @property {{ implementers: Assignment[], reviewer: Assignment }} implementation
+ */
+
+/**
+ * エージェントに依頼するときの、担当のエージェントとモデルと effort
+ * @typedef {object} ResolvedAssignment
+ * @property {RegisteredAgent} agent
+ * @property {{ model: string | null, effort: string | null }} execution
  */
 
 /**
@@ -34,7 +64,7 @@ import Ajv2020 from 'ajv/dist/2020.js';
  * @typedef {object} AgentsConfig
  * @property {Coordinator} coordinator 進行役の GitHub App
  * @property {Record<string, Agent>} agents 登録するエージェント (キーは識別子)
- * @property {{ author: Record<AuthoredStage, string>, implementers: string[], reviewer: string }} roles 段階ごとの担当
+ * @property {Roles} roles 段階ごとの担当
  */
 
 /**
@@ -62,6 +92,18 @@ import Ajv2020 from 'ajv/dist/2020.js';
 /**
  * @typedef {Agent & { id: string }} RegisteredAgent
  */
+
+/**
+ * 作成担当 (roles.<段階>.author) を設定する段階
+ * @type {readonly AuthoredStage[]}
+ */
+export const AUTHORED_STAGES = ['specification', 'domain-model', 'architecture', 'planning'];
+
+/**
+ * レビュー担当 (roles.<段階>.reviewer) を設定する段階
+ * @type {readonly ReviewedStage[]}
+ */
+export const REVIEWED_STAGES = ['requirements', 'specification', 'domain-model', 'architecture', 'implementation'];
 
 /** 設定ファイルを置くディレクトリ (リポジトリのルートからの相対パス) */
 export const CONFIG_DIR = '.github/coding-agent';
@@ -153,18 +195,27 @@ export function validateAgentRelations(config) {
     }
   };
 
-  for (const [stage, agentId] of Object.entries(config.roles.author)) {
-    requireRegistered(`roles.author.${stage}`, agentId);
+  for (const stage of AUTHORED_STAGES) {
+    requireRegistered(`roles.${stage}.author`, config.roles[stage].author.agent);
   }
-  for (const agentId of config.roles.implementers) {
-    requireRegistered('roles.implementers', agentId);
+  const implementers = config.roles.implementation.implementers.map((assignment) => assignment.agent);
+  for (const agentId of implementers) {
+    requireRegistered('roles.implementation.implementers', agentId);
   }
-  requireRegistered('roles.reviewer', config.roles.reviewer);
+  if (new Set(implementers).size !== implementers.length) {
+    errors.push('agents.json: roles.implementation.implementers に同じエージェントが重複しています');
+  }
+  for (const stage of REVIEWED_STAGES) {
+    requireRegistered(`roles.${stage}.reviewer`, config.roles[stage].reviewer.agent);
+  }
 
-  // PR の作成者は自分の PR を Approve できないため、レビュー担当は PR を作るエージェントと別にする
-  const authors = new Set([...Object.values(config.roles.author), ...config.roles.implementers]);
-  if (authors.has(config.roles.reviewer)) {
-    errors.push(`agents.json: roles.reviewer の "${config.roles.reviewer}" は、作成担当 (roles.author) や実装担当 (roles.implementers) と別のエージェントにしてください`);
+  // PR の作成者は自分の PR を Approve できないため、レビュー担当は、その段階の PR を作るエージェントと別にする
+  for (const stage of REVIEWED_STAGES) {
+    const reviewer = config.roles[stage].reviewer.agent;
+    const authors = stage === 'implementation' ? implementers : stage === 'requirements' ? [] : [config.roles[stage].author.agent];
+    if (authors.includes(reviewer)) {
+      errors.push(`agents.json: roles.${stage}.reviewer の "${reviewer}" は、その段階の作成担当と別のエージェントにしてください`);
+    }
   }
 
   // 段階の Issue は作成者 (進行役の Bot) で見分けるため、エージェントの Bot と同じにしない
@@ -241,6 +292,67 @@ export function getAgent(config, agentId) {
     throw new Error(`エージェント "${agentId}" は登録されていません`);
   }
   return { id: agentId, ...agent };
+}
+
+/**
+ * 担当の設定から、依頼に使うエージェントとモデルと effort を求める。
+ *
+ * @param {AgentsConfig} config
+ * @param {Assignment} assignment
+ * @returns {ResolvedAssignment}
+ */
+function resolveAssignment(config, assignment) {
+  return { agent: getAgent(config, assignment.agent), execution: toExecution(assignment) };
+}
+
+/**
+ * @param {Execution | undefined} execution
+ * @returns {{ model: string | null, effort: string | null }}
+ */
+function toExecution(execution) {
+  return { model: execution?.model ?? null, effort: execution?.effort ?? null };
+}
+
+/**
+ * 段階の作成担当を返す。
+ *
+ * @param {AgentsConfig} config
+ * @param {AuthoredStage} stage
+ * @returns {ResolvedAssignment}
+ */
+export function getAuthor(config, stage) {
+  return resolveAssignment(config, config.roles[stage].author);
+}
+
+/**
+ * 実装タスクの担当に選べるエージェントを返す。
+ *
+ * @param {AgentsConfig} config
+ * @returns {ResolvedAssignment[]}
+ */
+export function getImplementers(config) {
+  return config.roles.implementation.implementers.map((assignment) => resolveAssignment(config, assignment));
+}
+
+/**
+ * 段階のレビュー担当を返す。
+ *
+ * @param {AgentsConfig} config
+ * @param {ReviewedStage} stage
+ * @returns {ResolvedAssignment}
+ */
+export function getReviewer(config, stage) {
+  return resolveAssignment(config, config.roles[stage].reviewer);
+}
+
+/**
+ * エージェントが自分の作った PR を修正するときの、モデルと effort を返す。
+ *
+ * @param {RegisteredAgent} agent
+ * @returns {{ model: string | null, effort: string | null }}
+ */
+export function fixExecution(agent) {
+  return toExecution(agent.fix);
 }
 
 /**

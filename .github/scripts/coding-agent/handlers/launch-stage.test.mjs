@@ -141,6 +141,7 @@ describe('launchStage.run', () => {
     assert.equal(request.issueNumber, specification.number);
     assert.equal(request.pullRequestNumber, null);
     assert.equal(request.targetSha, DEVELOP_SHA);
+    assert.deepEqual(request.execution, { model: 'claude-model', effort: 'high' });
     assert.deepEqual(request.materials.feature, { number: feature.number, title: 'ログイン機能', body: feature.body });
     assert.equal(request.materials.artifact, 'docs/features/1-user-login/specification.md');
     assert.deepEqual(request.materials.documents, [{ name: '要件定義', path: 'docs/features/1-user-login/requirements.md' }]);
@@ -214,13 +215,13 @@ describe('launchStage.run', () => {
     assert.deepEqual((await run(fake, dispatchContext(reviewerTask.number), launchStage)).result, {});
 
     config.agents.agents.devin = { ...config.agents.agents.claude, name: 'devin', assignee: 'devin-account', bot: 'devin-app[bot]' };
-    config.agents.roles.implementers.push('devin');
+    config.agents.roles.implementation.implementers.push({ agent: 'devin' });
     try {
       const sharedTask = fake.addIssue({ labels: ['stage:implementation'], parent: planning.number, assignees: ['claude-account', 'devin-account'] });
       assert.deepEqual((await run(fake, dispatchContext(sharedTask.number), launchStage)).result, {});
     } finally {
       delete config.agents.agents.devin;
-      config.agents.roles.implementers.pop();
+      config.agents.roles.implementation.implementers.pop();
     }
     assert.equal(fake.comments.length, 0);
   });

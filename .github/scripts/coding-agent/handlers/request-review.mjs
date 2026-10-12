@@ -5,14 +5,15 @@
  *
  * 次の順に確認し、1 つでも満たさなければ何もしない。
  * 1. Draft でなく、needs-human ラベルが付いておらず、既定ブランチに向けた、このリポジトリのブランチからの PR である
- * 2. PR の作成者が、書き込み権限を持つ人か、登録済みのエージェント (レビュー担当を除く) の GitHub App である
+ * 2. PR の作成者が、書き込み権限を持つ人か、登録済みのエージェントの GitHub App である
  * 3. PR が Close する Issue がちょうど 1 件で、それが進行役の App の作った段階の Issue である
+ * 4. PR の作成者が、その段階のレビュー担当 (agents.json の roles.<段階>.reviewer) ではない
  *
  * 変更されたファイルが段階ごとに決めた範囲に収まっていなければ、範囲外のファイルを依頼に含める。
  * レビュー担当のワークフローは、範囲外のファイルがあればレビュー担当を呼ばずに差し戻す。
  */
 
-import { findAgentByBot, getAgent } from '../config.mjs';
+import { findAgentByBot, getReviewer } from '../config.mjs';
 import { findViolations } from '../changed-files.mjs';
 import { hasWritePermission } from '../github-issues.mjs';
 import { listChangedFiles, listReviewsBy } from '../github-pulls.mjs';
@@ -50,17 +51,11 @@ export const requestReview = {
     const repository = context.repo;
     const pullRequest = context.payload.pull_request;
     const notify = NOTIFYING_ACTIONS.has(context.payload.action ?? '');
-    const reviewer = getAgent(config.agents, config.agents.roles.reviewer);
 
     // PR の作成者を確かめる
     const author = pullRequest.user?.login ?? '';
     const agent = findAgentByBot(config.agents, author);
-    if (agent !== undefined) {
-      if (agent.id === reviewer.id) {
-        core.notice(`#${pullRequest.number} はレビュー担当 (${agent.name}) が作った PR のため、レビューしません`);
-        return {};
-      }
-    } else if (pullRequest.user?.type === 'Bot' || !(await hasWritePermission(github, repository, author))) {
+    if (agent === undefined && (pullRequest.user?.type === 'Bot' || !(await hasWritePermission(github, repository, author)))) {
       core.notice(`#${pullRequest.number} の作成者 ${author} は、書き込み権限を持つ人か登録済みのエージェントではないため、レビューしません`);
       return {};
     }
@@ -80,6 +75,13 @@ export const requestReview = {
     }
     const { issue, stage, feature, featureDir, artifact, documents, allowedFiles } = resolved.context;
 
+    // レビュー担当は段階ごとに決まる。PR の作成者は自分の PR を Approve できないため、レビュー担当が作った PR はレビューしない
+    const { agent: reviewer, execution } = getReviewer(config.agents, stage);
+    if (agent?.id === reviewer.id) {
+      core.notice(`#${pullRequest.number} は「${stage}」のレビュー担当 (${agent.name}) が作った PR のため、レビューしません`);
+      return {};
+    }
+
     const files = await listChangedFiles(github, repository, pullRequest.number);
     const violations = findViolations(files, allowedFiles);
     const previousReviews = await listReviewsBy(github, repository, pullRequest.number, reviewer.bot);
@@ -93,6 +95,7 @@ export const requestReview = {
       issueNumber: issue.number,
       pullRequestNumber: pullRequest.number,
       targetSha: pullRequest.head.sha,
+      execution,
       materials: {
         pullRequest: {
           number: pullRequest.number,

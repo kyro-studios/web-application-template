@@ -11,7 +11,11 @@ import {
   featureDirectory,
   findAgentByAssignee,
   findAgentByBot,
+  fixExecution,
   getAgent,
+  getAuthor,
+  getImplementers,
+  getReviewer,
   isCoordinator,
   isValidFeatureName,
   loadConfig,
@@ -71,23 +75,39 @@ describe('validateAgentRelations', () => {
 
   it('登録されていないエージェントを担当にできない', () => {
     const config = createAgentsConfig();
-    config.roles.author.architecture = 'gemini';
-    config.roles.implementers = ['claude', 'jules'];
+    config.roles.architecture.author.agent = 'gemini';
+    config.roles.implementation.implementers.push({ agent: 'jules' });
+    config.roles.requirements.reviewer.agent = 'devin';
 
     const errors = validateAgentRelations(config);
-    assert.equal(errors.length, 2);
-    assert.match(errors[0], /roles\.author\.architecture の "gemini"/);
-    assert.match(errors[1], /roles\.implementers の "jules"/);
+    assert.equal(errors.length, 3);
+    assert.match(errors[0], /roles\.architecture\.author の "gemini"/);
+    assert.match(errors[1], /roles\.implementation\.implementers の "jules"/);
+    assert.match(errors[2], /roles\.requirements\.reviewer の "devin"/);
   });
 
-  it('レビュー担当を作成担当や実装担当と同じエージェントにできない', () => {
+  it('同じエージェントを実装担当に重ねて登録できない', () => {
+    const config = createAgentsConfig();
+    config.roles.implementation.implementers.push({ agent: 'claude', model: 'other' });
+
+    assert.match(validateAgentRelations(config).join('\n'), /implementers に同じエージェントが重複しています/);
+  });
+
+  it('レビュー担当を、その段階の作成担当や実装担当と同じエージェントにできない', () => {
     const asAuthor = createAgentsConfig();
-    asAuthor.roles.author.planning = 'codex';
-    assert.match(validateAgentRelations(asAuthor).join('\n'), /roles\.reviewer の "codex"/);
+    asAuthor.roles['domain-model'].author.agent = 'codex';
+    assert.match(validateAgentRelations(asAuthor).join('\n'), /roles\.domain-model\.reviewer の "codex"/);
 
     const asImplementer = createAgentsConfig();
-    asImplementer.roles.implementers = ['claude', 'codex'];
-    assert.match(validateAgentRelations(asImplementer).join('\n'), /roles\.reviewer の "codex"/);
+    asImplementer.roles.implementation.implementers.push({ agent: 'codex' });
+    assert.match(validateAgentRelations(asImplementer).join('\n'), /roles\.implementation\.reviewer の "codex"/);
+  });
+
+  it('段階ごとに、作成担当とレビュー担当を入れ替えられる', () => {
+    const config = createAgentsConfig();
+    config.roles['domain-model'] = { author: { agent: 'codex' }, reviewer: { agent: 'claude' } };
+
+    assert.deepEqual(validateAgentRelations(config), []);
   });
 
   it('エージェントどうしで Bot 名を重複させられない (大文字と小文字は区別しない)', () => {
@@ -131,6 +151,32 @@ describe('エージェントの引き当て', () => {
   it('識別子からエージェントを取り出せる', () => {
     assert.equal(getAgent(config, 'claude').workflow, 'coding-agent-claude.yml');
     assert.throws(() => getAgent(config, 'toString'), /登録されていません/);
+  });
+});
+
+describe('段階ごとの担当', () => {
+  const config = createAgentsConfig();
+
+  it('作成担当とレビュー担当を、モデルと effort とあわせて返す', () => {
+    const author = getAuthor(config, 'specification');
+    assert.equal(author.agent.id, 'claude');
+    assert.deepEqual(author.execution, { model: 'claude-model', effort: 'high' });
+
+    const reviewer = getReviewer(config, 'specification');
+    assert.equal(reviewer.agent.id, 'codex');
+    assert.deepEqual(reviewer.execution, { model: 'codex-model', effort: 'medium' });
+  });
+
+  it('モデルと effort を省略すると null にする (ツールの既定を使う)', () => {
+    assert.deepEqual(getAuthor(config, 'planning').execution, { model: null, effort: null });
+    assert.deepEqual(getReviewer(config, 'requirements').execution, { model: null, effort: null });
+    assert.deepEqual(getImplementers(config).map((implementer) => implementer.agent.id), ['claude']);
+  });
+
+  it('修正のモデルと effort は、エージェントごとの設定を使う', () => {
+    assert.deepEqual(fixExecution(getAgent(config, 'codex')), { model: 'codex-fix-model', effort: 'low' });
+    const { fix, ...withoutFix } = getAgent(config, 'claude');
+    assert.deepEqual(fixExecution(withoutFix), { model: null, effort: null });
   });
 });
 

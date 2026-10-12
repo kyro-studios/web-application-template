@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { loadConfig } from './config.mjs';
+import { AUTHORED_STAGES, loadConfig } from './config.mjs';
 import { LABELS } from './setup-repository.mjs';
 import { FEATURE_LABEL, FEATURE_STAGES, IMPLEMENTATION_STAGE, getFeatureStage, stageIssueBody, stageLabel, stageOf } from './stages.mjs';
 
@@ -11,7 +11,8 @@ describe('段階の定義', () => {
   it('設定ファイルやセットアップのラベルと、段階がそろっている', async () => {
     const config = await loadConfig(ROOT_DIR);
     const authored = FEATURE_STAGES.filter((stage) => stage.id !== 'requirements').map((stage) => stage.id);
-    assert.deepEqual(Object.keys(config.agents.roles.author).sort(), [...authored].sort());
+    assert.deepEqual([...AUTHORED_STAGES].sort(), [...authored].sort());
+    assert.deepEqual(Object.keys(config.agents.roles).sort(), [...FEATURE_STAGES.map((stage) => stage.id), IMPLEMENTATION_STAGE].sort());
 
     const reviewed = FEATURE_STAGES.filter((stage) => stage.artifact !== null).map((stage) => stage.id);
     assert.deepEqual(Object.keys(config.stages.stages).sort(), [...reviewed, IMPLEMENTATION_STAGE].sort());

@@ -25,6 +25,7 @@ function fixtureAgent(id) {
     bot: `${id}-app[bot]`,
     workflow: `coding-agent-${id}.yml`,
     appClientId: `${id}-client-id`,
+    fix: { model: `${id}-fix-model`, effort: 'low' },
   };
 }
 
@@ -38,9 +39,12 @@ export function fixtureAgentsConfig() {
     coordinator: { bot: 'coordinator-app[bot]', appClientId: 'coordinator-client-id' },
     agents: { claude: fixtureAgent('claude'), codex: fixtureAgent('codex') },
     roles: {
-      author: { specification: 'claude', 'domain-model': 'claude', architecture: 'claude', planning: 'claude' },
-      implementers: ['claude'],
-      reviewer: 'codex',
+      requirements: { reviewer: { agent: 'codex' } },
+      specification: { author: { agent: 'claude', model: 'claude-model', effort: 'high' }, reviewer: { agent: 'codex', model: 'codex-model', effort: 'medium' } },
+      'domain-model': { author: { agent: 'claude' }, reviewer: { agent: 'codex' } },
+      architecture: { author: { agent: 'claude' }, reviewer: { agent: 'codex' } },
+      planning: { author: { agent: 'claude' } },
+      implementation: { implementers: [{ agent: 'claude' }], reviewer: { agent: 'codex' } },
     },
   };
 }

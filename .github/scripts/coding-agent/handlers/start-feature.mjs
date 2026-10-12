@@ -8,7 +8,7 @@
  * 本文の機能名が正しくなければ段階の Issue を作らずに知らせ、本文が編集されたときに改めて処理する。
  */
 
-import { featureDirectory, getAgent, isCoordinator, isValidFeatureName, MAX_FEATURE_NAME_LENGTH } from '../config.mjs';
+import { featureDirectory, getAuthor, isCoordinator, isValidFeatureName, MAX_FEATURE_NAME_LENGTH } from '../config.mjs';
 import { addBlockedBy, addSubIssue, getBlockedBy, hasLabel, hasWritePermission, listSubIssues } from '../github-issues.mjs';
 import { FEATURE_NAME_FIELD, parseIssueForm } from '../issue-form.mjs';
 import { FEATURE_LABEL, FEATURE_STAGES, stageIssueBody, stageLabel, stageOf } from '../stages.mjs';
@@ -101,8 +101,7 @@ export const startFeature = {
     const lines = [];
     for (const [index, stage] of FEATURE_STAGES.entries()) {
       const issue = stageIssues[index];
-      const assignee =
-        stage.id === 'requirements' ? author : getAgent(config.agents, config.agents.roles.author[stage.id]).assignee;
+      const assignee = stage.id === 'requirements' ? author : getAuthor(config.agents, stage.id).agent.assignee;
       const { data } = await github.rest.issues.addAssignees({ ...repository, issue_number: issue.number, assignees: [assignee] });
       if (!(data.assignees ?? []).some((user) => user.login.toLowerCase() === assignee.toLowerCase())) {
         core.warning(`#${issue.number} に ${assignee} を Assign できませんでした (リポジトリのコラボレーターか確認してください)`);

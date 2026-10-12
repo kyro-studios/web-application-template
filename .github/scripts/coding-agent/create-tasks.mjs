@@ -19,7 +19,7 @@
  */
 
 import { readFile } from 'node:fs/promises';
-import { ConfigError, getAgent, isCoordinator, loadConfig } from './config.mjs';
+import { ConfigError, getAgent, getImplementers, isCoordinator, loadConfig } from './config.mjs';
 import { addBlockedBy, addSubIssue, getBlockedBy, listSubIssues, measureIssueDepth } from './github-issues.mjs';
 import { MAX_SUB_ISSUE_LEVELS, MAX_SUB_ISSUES, measureDepth, validatePlan } from './plan-validation.mjs';
 import { IMPLEMENTATION_STAGE, stageLabel, stageOf } from './stages.mjs';
@@ -129,7 +129,7 @@ export default async function createTasks({ github, context, core, writeInterval
 
   const planningDepth = await measureIssueDepth(github, repository, planningNumber);
   const errors = validatePlan(input, {
-    agents: new Set(config.agents.roles.implementers),
+    agents: new Set(getImplementers(config.agents).map((implementer) => implementer.agent.id)),
     maxTasks,
     maxDepth: MAX_SUB_ISSUE_LEVELS - planningDepth,
     rootCapacity: MAX_SUB_ISSUES - otherRoots,

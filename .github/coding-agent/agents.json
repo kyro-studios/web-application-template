@@ -11,7 +11,7 @@
       "bot": "your-claude-app[bot]",
       "workflow": "coding-agent-claude.yml",
       "appClientId": "your-claude-app-client-id",
-      "model": null
+      "fix": { "model": "claude-haiku-5-5", "effort": "low" }
     },
     "codex": {
       "name": "Codex",
@@ -19,17 +19,31 @@
       "bot": "your-codex-app[bot]",
       "workflow": "coding-agent-codex.yml",
       "appClientId": "your-codex-app-client-id",
-      "model": null
+      "fix": { "model": "gpt-6-luna", "effort": "low" }
     }
   },
   "roles": {
-    "author": {
-      "specification": "claude",
-      "domain-model": "claude",
-      "architecture": "claude",
-      "planning": "claude"
+    "requirements": {
+      "reviewer": { "agent": "codex", "model": "gpt-6.1-sol", "effort": "medium" }
     },
-    "implementers": ["claude"],
-    "reviewer": "codex"
+    "specification": {
+      "author": { "agent": "claude", "model": "claude-haiku-5-5", "effort": "high" },
+      "reviewer": { "agent": "codex", "model": "gpt-6.1-sol", "effort": "medium" }
+    },
+    "domain-model": {
+      "author": { "agent": "codex", "model": "gpt-6.1-sol", "effort": "high" },
+      "reviewer": { "agent": "claude", "model": "claude-haiku-5-5", "effort": "medium" }
+    },
+    "architecture": {
+      "author": { "agent": "claude", "model": "claude-sonnet-5-5", "effort": "medium" },
+      "reviewer": { "agent": "codex", "model": "gpt-6.1-sol", "effort": "medium" }
+    },
+    "planning": {
+      "author": { "agent": "claude", "model": "claude-sonnet-5-5", "effort": "medium" }
+    },
+    "implementation": {
+      "implementers": [{ "agent": "claude", "model": "claude-haiku-5-5", "effort": "high" }],
+      "reviewer": { "agent": "codex", "model": "gpt-6.1-sol", "effort": "medium" }
+    }
   }
 }
