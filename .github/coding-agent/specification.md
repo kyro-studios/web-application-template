@@ -26,15 +26,16 @@
 | 役割 | 担当 | 内容 |
 | --- | --- | --- |
 | 人 | 機能の親 Issue の作成者 | 要件定義書の作成と修正、レビューが上限を超えたときの対応、`main` へのマージ |
-| 作成担当 | Claude | 仕様書、概念モデル、アーキテクチャ設計、実装計画、実装と、それぞれの修正 |
-| レビュー担当 | Codex | 成果物と実装のレビュー、PR の Approve とマージ |
+| 作成担当 | 段階ごとに `agents.json` で決める (既定は 15.3 の 7c の表) | 仕様書、概念モデル、アーキテクチャ設計、実装計画、実装と、それぞれの修正 |
+| レビュー担当 | 段階ごとに `agents.json` で決める | 成果物と実装のレビュー、PR の Approve とマージ |
 
 ### 2.1 エージェントの登録
 
 仕組みは、特定のエージェントに依存しないように作る。「PR を作るのは Claude だけ」のような前提には頼らない。
 
 - エージェントは登録制にする。登録先は `.github/coding-agent/agents.json` とし、JSON Schema (`agents-schema.json`) で形式を検証する。Schema で表せない関係 (担当が登録済みか、レビュー担当が作成担当と別か、Bot 名などがエージェントどうしで重複していないか) は、設定を読み込むスクリプトで検証する
-- どの段階をどのエージェントが担当するかも、同じファイルで決める
+- どの段階をどのエージェントが担当するか、担当がどのモデルと effort を使うかも、同じファイルで決める
+  - モデルと effort は頻繁に調整するため、このファイルの書き換えだけで変えられるようにする。ワークフローには、モデルの名前や effort を書かない
 - PR の作成者やレビューの投稿者がどのエージェントかは、GitHub App の Bot 名から引き当てる
 
 ```json
@@ -49,19 +50,26 @@
       "assignee": "example-claude",
       "bot": "example-claude-app[bot]",
       "workflow": "coding-agent-claude.yml",
-      "appClientId": "Iv23li..."
+      "appClientId": "Iv23li...",
+      "fix": { "model": "claude-haiku-5-5", "effort": "low" }
     },
     "codex": { "...": "..." }
   },
   "roles": {
-    "author": {
-      "specification": "claude",
-      "domain-model": "claude",
-      "architecture": "claude",
-      "planning": "claude"
+    "requirements": {
+      "reviewer": { "agent": "codex", "model": "gpt-6.1-sol", "effort": "medium" }
     },
-    "implementers": ["claude"],
-    "reviewer": "codex"
+    "specification": {
+      "author": { "agent": "claude", "model": "claude-haiku-5-5", "effort": "high" },
+      "reviewer": { "agent": "codex", "model": "gpt-6.1-sol", "effort": "medium" }
+    },
+    "domain-model": { "author": { "...": "..." }, "reviewer": { "...": "..." } },
+    "architecture": { "author": { "...": "..." }, "reviewer": { "...": "..." } },
+    "planning": { "author": { "...": "..." } },
+    "implementation": {
+      "implementers": [{ "agent": "claude", "model": "claude-haiku-5-5", "effort": "high" }],
+      "reviewer": { "agent": "codex", "model": "gpt-6.1-sol", "effort": "medium" }
+    }
   }
 }
 ```
@@ -73,9 +81,12 @@
 | `bot` | GitHub App の Bot 名 |
 | `workflow` | そのエージェントを動かすワークフローのファイル名 |
 | `appClientId` | GitHub App の Client ID |
-| `roles.author` | 段階ごとの作成担当 |
-| `roles.implementers` | 実装計画で実装タスクに割り当ててよいエージェント |
-| `roles.reviewer` | レビュー担当 |
+| `fix` | そのエージェントが作った PR を修正するときのモデルと effort (どの段階でも同じ) |
+| `roles.<段階>.author` | 段階ごとの作成担当 (要件定義は人が作るため無い) |
+| `roles.implementation.implementers` | 実装計画で実装タスクに割り当ててよいエージェント |
+| `roles.<段階>.reviewer` | 段階ごとのレビュー担当 (実装計画はレビューが無いため無い) |
+| `agent` | 担当のエージェントの識別子 |
+| `model`、`effort` | 担当が使うモデルと effort。省略するか `null` なら、エージェントのツールの既定を使う。指定できる値は、エージェントのツールとモデルによる |
 
 - このファイルには秘密の値を書かない。GitHub App の秘密鍵や API キーは Secrets に置く (2.4)
 - 運用中に調整したい値 (修正の上限など) は Variables に置く
@@ -93,7 +104,7 @@ flowchart LR
 ```
 
 - **振り分け用のワークフロー**: 起動の判定、レビュー対象の判定、修正の回数の確認など、エージェントに依存しない処理を受け持つ
-- **エージェントごとのワークフロー**: 決まった形式の入力 (作成か修正か、対象の Issue や PR、指示の内容) を受け取り、決まった形式の出力 (変更の差分、コミットメッセージ、PR の説明) を返すことだけを受け持つ
+- **エージェントごとのワークフロー**: 決まった形式の入力 (作成か修正かレビューか、対象の Issue や PR、指示の内容、モデルと effort) を受け取り、決まった形式の出力 (変更の差分、コミットメッセージ、PR の説明、またはレビューの結果) を返すことだけを受け持つ。どのエージェントのワークフローも、作成、修正、レビューのすべてを受け持つ
 - **共通の書き込みジョブ**: 出力を受け取り、`agents.json` で引いた担当の GitHub App のトークンで、push と PR の作成を行う。PR の本文に `Closes #N` を入れるのもこのジョブで、どのエージェントでも確実に入るようにする
 
 エージェントを追加するときは、この形式に従ったワークフローを 1 つ書き、`agents.json` に登録する。
@@ -102,15 +113,18 @@ flowchart LR
 
 | 入力 | 内容 |
 | --- | --- |
-| `mode` | `create` (作成) か `fix` (修正) |
-| `stage` | 段階 (`specification`、`domain-model`、`architecture`、`planning`、`implementation`) |
+| `mode` | `create` (作成)、`fix` (修正)、`review` (レビュー) のどれか |
+| `stage` | 段階 (`requirements`、`specification`、`domain-model`、`architecture`、`planning`、`implementation`) |
 | `issue-number` | 対象の Issue の番号 |
-| `pull-request-number` | 修正の対象の PR の番号。作成のときは空 |
+| `pull-request-number` | 修正やレビューの対象の PR の番号。作成のときは空 |
 | `target-sha` | 作業を始めるコミット |
 | `request-run-id` | 依頼の Artifact を保存した、振り分け用のワークフローの実行の ID |
 | `request-id` | 依頼の識別子 (Artifact の中のファイル名) |
 
 エージェントのワークフローは、`request-run-id` を指定して Artifact をダウンロードし (`actions: read` の権限が必要)、`<request-id>.json` を読む。
+
+- 依頼には、担当が使うモデルと effort (`execution`) を含める。振り分け用のワークフローが `agents.json` から引いて入れ、エージェントのワークフローはその値をそのままツールに渡す (Claude Code は `--model` と `--effort`、Codex は `openai/codex-action` の `model` と `effort`)
+- モデルと effort はコマンドの引数に渡すため、使える文字を絞り、振り分け用のワークフローとエージェントのワークフローの両方で形式を確かめる
 
 `workflow_call` では呼び出すファイルを `uses:` に固定で書く必要があり、設定ファイルから選べない。そのため、エージェントのワークフローは `workflow_dispatch` で呼び出す。
 
@@ -124,7 +138,8 @@ flowchart LR
   - 振り分け用のワークフローは、まず読み取り専用の GITHUB_TOKEN で処理するイベントか判定し、処理するときだけ進行役の App のトークンを発行する
   - 進行役の App の Bot 名は、どのエージェントの Bot 名とも別にする。`agents.json` の検証で確認する
   - PR の作成者は、自分の PR を Approve できない。作成担当とレビュー担当の App を分けることで、レビュー担当が Approve できるようにする
-  - そのため、`roles.reviewer` のエージェントは、`roles.author` と `roles.implementers` のどのエージェントとも別にする。`agents.json` の検証で確認する
+  - そのため、段階ごとに、レビュー担当 (`roles.<段階>.reviewer`) のエージェントは、その段階の作成担当 (`roles.<段階>.author`、実装タスクでは `roles.implementation.implementers` のどれか) と別にする。`agents.json` の検証で確認する
+  - 段階が違えば、同じエージェントが作成担当にもレビュー担当にもなれる (例: 概念モデルは Codex が作り Claude がレビューし、仕様書は Claude が作り Codex がレビューする)
 - エージェントには、読み取り専用のトークンだけを渡す。書き込みは、エージェントの出力を受け取った別のジョブが、GitHub App のトークンで行う
 - GITHUB_TOKEN で行った操作では次のワークフローが起動しないため、Issue の作成、Assign、push、PR の作成、レビュー、マージには GitHub App のトークンを使う
 
@@ -293,8 +308,8 @@ docs/features/<機能の親 Issue の番号>-<機能名>/
 作成担当のエージェントは、次の条件をすべて満たしたときに起動する。
 
 - 進行役の App が作った、Open の段階の Issue で、その段階の作成担当が Assignee に含まれている
-  - 文書の段階と実装計画の作成担当は、`roles.author` で決まる
-  - 実装タスクの作成担当は、`roles.implementers` のうち、Issue に Assign されているエージェント (実装計画で割り当てたもの) とする。該当するエージェントがいない (人が対応するタスクや、子タスクをまとめるだけのタスク) か、2 つ以上いる場合は起動しない
+  - 文書の段階と実装計画の作成担当は、`roles.<段階>.author` で決まる
+  - 実装タスクの作成担当は、`roles.implementation.implementers` のうち、Issue に Assign されているエージェント (実装計画で割り当てたもの) とする。該当するエージェントがいない (人が対応するタスクや、子タスクをまとめるだけのタスク) か、2 つ以上いる場合は起動しない
 - すべての依存先 (Sub Issue と Blocked by の Issue) が Close されている
 - 依存先に紐づく PR に、Open のまま残っているものが無い (マージされずに Close された PR は、破棄されたものとして扱う)
 
@@ -326,8 +341,10 @@ docs/features/<機能の親 Issue の番号>-<機能名>/
   - 指示は、すべての段階に共通する指示 (`common.md`) に、段階の種類ごとの指示を続けて組み立てる。文書の段階は、文書の段階に共通する指示 (`documents.md`) と段階ごとの指示 (`<段階>.md`) を続ける。実装計画は `planning.md` を続ける。実装タスクは、実装の指示 (`implementation.md`) と、作成のときの出力の指示 (`implementation-output.md`) を続ける
   - 実装の出力の指示を別のファイルにするのは、修正のときに `implementation.md` だけを参考として添えるため (9.3)
 - 文書の段階では、エージェントにはファイルの読み書きだけを許可し、コマンドは実行させない
-- 実装計画では、エージェントには読むことだけを許可し、ファイルは変更させない。計画を `plan-schema.json` の形式で出力させる (10.1)
+  - Codex はコマンドを使ってファイルを読み書きするため、`permission-profile` を `:workspace` にし、作業ディレクトリの外への書き込みとネットワークへの接続をさせない
+- 実装計画では、エージェントには読むことだけを許可し、ファイルは変更させない (Codex は `:read-only`)。計画を `plan-schema.json` の形式で出力させる (10.1)
 - 実装タスクでは、作成と修正のどちらでも、ファイルの読み書きに加えて、コマンドの実行 (Bash) を許可する (6.3)
+  - Codex による実装タスクには、まだ対応しない。ネットワークや Docker を使える権限の設計が別に必要なため。設定されていた場合は、理由が分かるエラーで止める
 - エージェントは、変更のほかに、コミットメッセージと PR の説明 (`result-schema.json` の形式) を出力する
 - 作業を始めたコミットとの差分をまとめ、共通の書き込みジョブ (`coding-agent-publish.yml`) に渡す
 
@@ -412,9 +429,11 @@ docs/features/<機能の親 Issue の番号>-<機能名>/
 
 1. レビュー担当のワークフローは、既定ブランチと、レビューする PR の head の SHA を、別々のディレクトリにチェックアウトする
    - レビューの指示 (`prompts/review/`) やスクリプトは、既定ブランチのものを使う。PR の変更で書き換えられないようにするため
-   - レビュー担当は、PR の head のディレクトリで、読み取りだけを許可して動かす (Codex の `permission-profile` を `:read-only` にする)。ファイルの編集やネットワークへの接続はさせない
-2. 変更してよい範囲の外にあるファイルが変更されていれば、Codex を呼ばずに、範囲外のファイルごとに must の指摘を作る (8.2)
-3. Codex の出力を受け取った別のジョブが、レビュー担当の GitHub App でレビューを投稿する
+   - レビュー担当は、PR の head のディレクトリで、読み取りだけを許可して動かす。ファイルの編集やネットワークへの接続はさせない
+     - Codex は `permission-profile` を `:read-only` にする
+     - Claude は、ファイルを読むツールと、差分を確かめる git のコマンド (`git diff`、`git log`、`git show`) だけを許可する
+2. 変更してよい範囲の外にあるファイルが変更されていれば、レビュー担当を呼ばずに、範囲外のファイルごとに must の指摘を作る (8.2)
+3. レビュー担当の出力を受け取った共通のレビューの投稿ジョブ (`coding-agent-publish-review.yml`) が、レビュー担当の GitHub App でレビューを投稿する
 4. 投稿する直前に PR の head を取得し直し、レビューした SHA と同じか確認する。違えば投稿しない (新しい push で起動したレビューに任せる)
 5. レビューした SHA を `commit_id` に指定して、Approve か Request changes を投稿する
 6. Approve した場合は、`expectedHeadOid` を指定して、自動マージを有効にする (GraphQL の `enablePullRequestAutoMerge`)。必要な条件がそろうと、GitHub が PR を Merge Queue に入れる
@@ -523,6 +542,8 @@ docs/features/<機能の親 Issue の番号>-<機能名>/
 - PR の作成者が登録済みのエージェントでなければ (人が作った PR なら)、何もしない。レビューの結果は GitHub が作成者に通知する
 - エージェントには、レビュー担当の GitHub App が投稿したレビューだけを渡す。第三者のコメントは渡さない (コメントでエージェントに指示を出せないようにするため)
 - `must` の指摘は必ず直すよう指示する。`should` と `nit` の指摘は、直すかどうかを修正担当の判断に任せる
+- 修正は、PR を作ったエージェントが、エージェントごとの修正のモデルと effort (`agents.json` の `agents.<識別子>.fix`) で行う。作成より安い設定にして、修正の費用を抑える
+- 差し戻しを確かめるときは、その段階のレビュー担当の GitHub App が投稿したレビューだけを見る
 - 修正を始める前に、レビューした SHA と今の head が同じか確認する。違えば修正しない
 - 修正のジョブは、起動したきっかけに関係なく、その時点の head の SHA に対する理由 (レビュー担当の差し戻しと CI の失敗) をすべて集めて渡す。PR ごとの `concurrency` で 1 つずつ実行する
   - 差し戻しと CI の失敗が同じコミットに対してほぼ同時に起こると、後から起動した修正は head が変わっているため止まる。理由をまとめて渡すことで、片方の理由が修正から漏れないようにする
@@ -583,8 +604,8 @@ docs/features/<機能の親 Issue の番号>-<機能名>/
 ### 10.1 実装計画
 
 1. 実装計画の段階が起動すると (6 章)、作成担当が仕様書、概念モデル、アーキテクチャ設計と既存のコードを読み、実装タスクに分割した計画を `plan-schema.json` の形式で出力する
-   - 依頼には、実装タスクの担当に選べるエージェント (`roles.implementers`) と、タスクの数と親子関係の深さの上限を含める
-   - タスクの担当は、`roles.implementers` のエージェントか、人が対応するタスクや子タスクをまとめるだけのタスクでは `null` にする
+   - 依頼には、実装タスクの担当に選べるエージェント (`roles.implementation.implementers`) と、タスクの数と親子関係の深さの上限を含める
+   - タスクの担当は、`roles.implementation.implementers` のエージェントか、人が対応するタスクや子タスクをまとめるだけのタスクでは `null` にする
 2. 作成担当のワークフローの後に、共通の Issue の作成ジョブ (`coding-agent-tasks.yml`) が計画を機械的に検証する。問題があれば Issue を 1 件も作らず、実装計画の Issue にコメントで知らせる
    - タスクの数の上限は Variables の `PLANNER_MAX_TASKS` (既定は 30)、親子関係の深さの上限は、Sub Issue の階層の上限 (8) から実装計画の Issue の深さを差し引いた値にする
    - 本文に仕組みの印 (`<!-- coding-agent` で始まる HTML コメント) を含む計画は受け付けない。印を偽造して、作成済みの Issue と取り違えさせないため
@@ -664,7 +685,7 @@ docs/features/<機能の親 Issue の番号>-<機能名>/
 
 | ファイル | 内容 |
 | --- | --- |
-| `.github/coding-agent/agents.json` | エージェントの登録と、段階ごとの担当 (2.1)。形式は `agents-schema.json` |
+| `.github/coding-agent/agents.json` | エージェントの登録と、段階ごとの担当、担当が使うモデルと effort (2.1)。形式は `agents-schema.json` |
 | `.github/coding-agent/stages.json` | 段階ごとに変更してよいファイル (5.1)。形式は `stages-schema.json` |
 | `.github/workflows/coding-agent-ci-failure.yml` | CI とみなすワークフロー。`on.workflow_run.workflows` に名前で登録する (9.2。当面は作らない) |
 | `.github/coding-agent/review-schema.json` | レビュー担当の出力の形式 (8.6) |
@@ -738,7 +759,7 @@ Variables と Secrets は、次のように整理した。
 | 6. 修正のループ (前半) | レビューの差し戻しの修正、修正の上限、`needs-human` | 完了 |
 | 7a. 実装計画 | 計画の作成と、実装タスクの Issue の作成 | 完了 |
 | 7b. 実装タスク | 実装タスクの起動と、コマンドの実行を含む実装 | 完了 |
-| 7c. 段階ごとの担当とモデル | 段階ごとのレビュー担当、モデルと effort の指定、Codex の作成と Claude のレビュー (15.3) | 未着手 |
+| 7c. 段階ごとの担当とモデル | 段階ごとのレビュー担当、モデルと effort の指定、Codex の作成と Claude のレビュー (15.3) | 完了 |
 | 8. 修正のループ (後半) | Merge Queue からの除外 (コンフリクトなど) の修正。CI の失敗は、CI を作らないため対象外 (15.3) | 未着手 |
 | 9. 後片付け | 新しいセットアップ手順の作成など | 未着手 |
 
@@ -771,13 +792,13 @@ Variables と Secrets は、次のように整理した。
 | 実装計画 | Claude Sonnet 5.5 (Medium) | なし |
 | 実装タスク | Claude Haiku 5.5 (High) | Codex 6.1 Sol (Medium) |
 
-- 修正は、PR を作ったエージェントが、作成より安い設定で行う。Codex は Codex 6.1 Luna (Low)、Claude は Claude Haiku 5.5 (Low)
+- 修正は、PR を作ったエージェントが、作成より安い設定で行う。Codex は Codex 6 Luna (Low)、Claude は Claude Haiku 5.5 (Low)
 - モデルと effort は頻繁に調整するため、設定ファイルの書き換えだけで変えられるようにする。ワークフローは、どのモデルを使うかに依存させない (モデルの名前や effort をワークフローに書かない)
-- 実現するために、次を作る
-  - 段階ごとのレビュー担当: `roles.reviewer` を段階ごとに指定できるようにする。作成担当とレビュー担当を別のエージェントにする制約 (2.3) は、段階ごとに確かめる
-  - 段階ごと・役割 (作成、修正、レビュー) ごとのモデルと effort: `agents.json` で指定できるようにする。effort をそれぞれのツールに渡す方法は、公式のドキュメントで確かめてから決める
-  - Codex による作成と修正、Claude によるレビュー: エージェントごとのワークフローが、作成・修正・レビューのどれも受け持てるようにする (2.2 の共通の入力と出力に従う)
-- 作る時期は、PR #10 (7b) のマージの後、8 (修正のループの後半) の前とする
+- 実現したこと
+  - 段階ごとのレビュー担当と、段階ごと・役割 (作成、修正、レビュー) ごとのモデルと effort を、`agents.json` で指定する (2.1)。テンプレートの `agents.json` には、上の表の値を入れた。Codex 6.1 Sol は `gpt-6.1-sol`、Codex 6 Luna は `gpt-6-luna`
+  - 振り分け用のワークフローが、依頼にモデルと effort を入れる。エージェントのワークフローは、その値をツールに渡すだけにする (2.2)
+  - Codex による作成と修正、Claude によるレビュー: エージェントごとのワークフローが、作成・修正・レビューのどれも受け持つ。レビューの投稿は、共通のワークフロー (`coding-agent-publish-review.yml`) に切り出した (8.3)
+  - Codex による実装タスクには、まだ対応しない (6.1)
 
 **実装計画のレビュー (見送り)**
 
