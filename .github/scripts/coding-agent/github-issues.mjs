@@ -317,9 +317,35 @@ export function hasLabel(labels, name) {
 const AGENT_LABEL_COLOR = '5319e7';
 
 /**
+ * ラベルが無ければ作る。存在しないラベルを Issue に付けたときの振る舞いは、公式のドキュメントで
+ * 確かめられないため、付ける前に作っておく。
+ *
+ * @param {GitHub} github
+ * @param {Repository} repository
+ * @param {{ name: string, color: string, description: string }} label
+ */
+export async function ensureLabel(github, repository, label) {
+  try {
+    await github.rest.issues.getLabel({ ...repository, name: label.name });
+    return;
+  } catch (error) {
+    if (/** @type {{ status?: number }} */ (error).status !== 404) {
+      throw error;
+    }
+  }
+  try {
+    await github.rest.issues.createLabel({ ...repository, ...label, description: label.description.slice(0, 100) });
+  } catch (error) {
+    // ほかの実行が同時に作った場合は、作成済み (422) になる
+    if (/** @type {{ status?: number }} */ (error).status !== 422) {
+      throw error;
+    }
+  }
+}
+
+/**
  * 担当のエージェントを表すラベル (agent:<識別子>) が無ければ作る。エージェントを登録したときに、
- * セットアップをやり直さずに済むようにするため。存在しないラベルを Issue に付けたときの振る舞いは、
- * 公式のドキュメントで確かめられないため、付ける前に作っておく。
+ * セットアップをやり直さずに済むようにするため。
  *
  * @param {GitHub} github
  * @param {Repository} repository
@@ -328,22 +354,6 @@ const AGENT_LABEL_COLOR = '5319e7';
 export async function ensureAgentLabels(github, repository, agents) {
   const unique = new Map(agents.map((agent) => [agent.id, agent]));
   for (const agent of unique.values()) {
-    const name = agentLabel(agent.id);
-    try {
-      await github.rest.issues.getLabel({ ...repository, name });
-      continue;
-    } catch (error) {
-      if (/** @type {{ status?: number }} */ (error).status !== 404) {
-        throw error;
-      }
-    }
-    try {
-      await github.rest.issues.createLabel({ ...repository, name, color: AGENT_LABEL_COLOR, description: `担当のエージェント: ${agent.name}`.slice(0, 100) });
-    } catch (error) {
-      // ほかの実行が同時に作った場合は、作成済み (422) になる
-      if (/** @type {{ status?: number }} */ (error).status !== 422) {
-        throw error;
-      }
-    }
+    await ensureLabel(github, repository, { name: agentLabel(agent.id), color: AGENT_LABEL_COLOR, description: `担当のエージェント: ${agent.name}` });
   }
 }

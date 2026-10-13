@@ -4,7 +4,7 @@
  * テンプレートから作ったリポジトリは、テンプレートの後の変更を自動では受け取らない。また、Issue のイベントで
  * 動くワークフローは既定ブランチ (develop) のものが使われるため、動作確認の前に develop へ反映する必要がある。
  * develop はルールセットで保護されているため、取り込みを push する間だけルールセットを無効にし、必ず有効に戻す。
- * 取り込むのは、仕組みのファイル (SYNCED_PATTERNS) だけ。その範囲の中はテンプレートと同じにし (テンプレートで
+ * 取り込むのは、仕組みのファイル (mechanism-files.mjs) だけ。その範囲の中はテンプレートと同じにし (テンプレートで
  * 削除したファイルも削除する)、範囲の外 (エージェントが作ったアプリケーションのコードや成果物) には触れない。
  * テンプレートのファイルのうち、どちらにも分類されていないものがあれば、何もせずに終わる。--agents を指定すると、
  * 手元のファイルで agents.json を置き換える。push する前に、取り込んだ後の設定ファイルを検証する。
@@ -29,26 +29,16 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { minimatch } from 'minimatch';
 import { CONFIG_DIR, loadConfig } from './config.mjs';
+import { MECHANISM_FILE_PATTERNS } from './mechanism-files.mjs';
 import { DEVELOP_BRANCH, RULESET_NAMES } from './setup-repository.mjs';
 
 const REPOSITORY_PATTERN = /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/;
 
 /**
- * テンプレートから取り込むファイル (仕組みのファイル)。テンプレートにファイルを足したら、ここか
- * NOT_SYNCED_PATTERNS のどちらかに分類する (分類されていないファイルがあると、取り込みは失敗する)
+ * テンプレートから取り込むファイル。仕組みのファイル (mechanism-files.mjs) と同じにする。仕組みのファイルの範囲の外を
+ * PR を通さずに変えると、確認用のリポジトリの仕組みが止まるため (PR を通らない変更の検知)
  */
-export const SYNCED_PATTERNS = [
-  `${CONFIG_DIR}/**`,
-  '.github/scripts/coding-agent/**',
-  '.github/workflows/coding-agent-*.yml',
-  '.github/workflows/validate-conventional-commits.yml',
-  '.github/ISSUE_TEMPLATE/feature.yml',
-  '.husky/**',
-  'commitlint.config.mjs',
-  'package.json',
-  'package-lock.json',
-  'scripts/postinstall.js',
-];
+export const SYNCED_PATTERNS = MECHANISM_FILE_PATTERNS;
 
 /**
  * テンプレートにあるが、取り込まないファイル。確認用のリポジトリに固有の設定 (agents.json) と、
@@ -213,7 +203,7 @@ async function sync(options) {
     const plan = planSync(filesOf('FETCH_HEAD', cwd), filesOf('HEAD', cwd));
     if (plan.unclassified.length > 0) {
       throw new Error(
-        `テンプレートに、取り込むかどうかが決まっていないファイルがあります。sync-sandbox.mjs の SYNCED_PATTERNS か NOT_SYNCED_PATTERNS に加えてください:\n${plan.unclassified.map((path) => `  ${path}`).join('\n')}`,
+        `テンプレートに、取り込むかどうかが決まっていないファイルがあります。mechanism-files.mjs の MECHANISM_FILE_PATTERNS か、sync-sandbox.mjs の NOT_SYNCED_PATTERNS に加えてください:\n${plan.unclassified.map((path) => `  ${path}`).join('\n')}`,
       );
     }
     // パスに glob の記号が含まれても、そのままのパスとして扱う
