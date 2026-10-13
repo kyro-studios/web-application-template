@@ -3,8 +3,9 @@ import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
-import { createRouter, eventKey } from './route.mjs';
-import { createFakeCore } from './testing/fake-github.mjs';
+import { HALTED_LABEL } from './halt.mjs';
+import { createRouter, describeEvent, eventKey } from './route.mjs';
+import { createFakeCore, createFakeGitHub } from './testing/fake-github.mjs';
 import { createFixtureRoot } from './testing/fixture-config.mjs';
 
 /** テスト用の設定ファイルを置いたディレクトリ (リポジトリの設定に左右されないようにする) */
@@ -49,10 +50,11 @@ function createRequest(overrides = {}) {
 /**
  * @param {(args: any) => Promise<void>} step
  * @param {ReturnType<typeof createContext>} context
+ * @param {ReturnType<typeof createFakeGitHub>} [fake]
  */
-async function runStep(step, context) {
+async function runStep(step, context, fake = createFakeGitHub({ actor: 'coordinator-app[bot]' })) {
   const core = createFakeCore();
-  await step({ github: {}, context, core });
+  await step({ github: fake.github, context: { repo: { owner: 'kyro-studios', repo: 'sandbox' }, ...context }, core });
   return core;
 }
 
@@ -60,6 +62,14 @@ describe('eventKey', () => {
   it('アクションがあればイベント名とつなげる', () => {
     assert.equal(eventKey(createContext('issues', 'opened')), 'issues.opened');
     assert.equal(eventKey(createContext('workflow_dispatch')), 'workflow_dispatch');
+  });
+});
+
+describe('describeEvent', () => {
+  it('イベントと、対象の Issue や PR の番号、または push のコミットを示す', () => {
+    assert.equal(describeEvent({ eventName: 'issues', payload: { action: 'closed', issue: { number: 12 } } }), '`issues.closed` (#12)');
+    assert.equal(describeEvent({ eventName: 'workflow_dispatch', payload: { inputs: { 'issue-number': '34' } } }), '`workflow_dispatch` (#34)');
+    assert.equal(describeEvent({ eventName: 'push', payload: { after: 'abcdef0123' } }), '`push` (abcdef0)');
   });
 });
 
@@ -176,6 +186,46 @@ describe('route', () => {
     assert.deepEqual((await readdir(requestDir)).sort(), ['issue-12.json', 'issue-13.json']);
     // 振り分けをやり直す Issue は、重複を取り除いて出力する
     assert.deepEqual(JSON.parse(core.outputs['redispatch-issues']), [3, 4]);
+  });
+
+  it('停止中は、停止中も動かすハンドラーだけを実行し、処理しなかったことを停止中の Issue に残す', async () => {
+    const fake = createFakeGitHub({ actor: 'coordinator-app[bot]' });
+    const haltIssue = fake.addIssue({ title: '停止中', labels: [HALTED_LABEL] });
+    /** @type {string[]} */
+    const called = [];
+    const { route } = createRouter([
+      {
+        name: '段階の起動',
+        events: ['issues.closed'],
+        run: async () => {
+          called.push('launch');
+          return { requests: [createRequest()] };
+        },
+      },
+      {
+        name: '検知',
+        events: ['issues.closed'],
+        runsWhileHalted: true,
+        run: async () => {
+          called.push('detect');
+          return {};
+        },
+      },
+    ]);
+
+    const context = { ...createContext('issues', 'closed'), payload: { action: 'closed', issue: { number: 12 } } };
+    const core = await runStep(route, context, fake);
+
+    assert.deepEqual(called, ['detect']);
+    assert.equal(core.outputs.dispatches, '[]');
+    assert.equal(fake.comments.length, 1);
+    assert.equal(fake.comments[0].issue_number, haltIssue.number);
+    assert.match(fake.comments[0].body, /停止中のため、`issues\.closed` \(#12\) の「段階の起動」を処理しませんでした/);
+
+    // 停止中の Issue が Close されたら、再開する
+    haltIssue.state = 'closed';
+    await runStep(route, context, fake);
+    assert.deepEqual(called, ['detect', 'launch', 'detect']);
   });
 
   it('依頼が無ければ、何も保存しない', async () => {

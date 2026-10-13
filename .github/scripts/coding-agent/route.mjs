@@ -10,6 +10,9 @@
  * 依頼の全体は REQUEST_DIR に保存して Artifact としてアップロードし、エージェントのワークフローの呼び出し方を
  * dispatches として出力する。実際の呼び出しは、actions: write の権限を持つ別のジョブ (dispatch-agents.mjs) が行う。
  *
+ * 仕組みの停止中 (halt.mjs) は、停止中も動かすハンドラー (PR を通らない変更の検知) だけを実行する。
+ * ほかのハンドラーは実行せず、処理しなかったことを停止中の Issue にコメントで残す。
+ *
  * 1 つのイベントで複数の Issue を処理する必要がある場合 (Close された Issue を待っていた Issue の起動など) は、
  * Issue ごとに振り分け用のワークフローを手動実行し直す。同じ Issue の処理を、Issue ごとの concurrency で 1 つずつに絞るため。
  *
@@ -29,7 +32,9 @@
 import { toDispatch, validateRequest, writeRequest } from './agent-request.mjs';
 import { ConfigError, getAgent, loadConfig } from './config.mjs';
 import { closeParent } from './handlers/close-parent.mjs';
+import { findHaltIssue } from './halt.mjs';
 import { detectConflicts } from './handlers/detect-conflicts.mjs';
+import { detectUntrackedChanges } from './handlers/detect-untracked-changes.mjs';
 import { launchStage, wakeWaitingStages } from './handlers/launch-stage.mjs';
 import { requestFix } from './handlers/request-fix.mjs';
 import { requestReview } from './handlers/request-review.mjs';
@@ -55,6 +60,7 @@ import { startFeature } from './handlers/start-feature.mjs';
  * @property {string[]} events 処理するイベント (`<イベント名>.<アクション>`。アクションの無いイベントはイベント名だけ)
  * @property {(args: HandlerArgs) => Promise<boolean>} [matches] イベントを処理するか判定する (読み取り専用のトークンで呼ばれる)。省略すると常に処理する
  * @property {(args: HandlerArgs) => Promise<HandlerResult>} run 処理を行い、結果を返す (進行役の GitHub App のトークンで呼ばれる)
+ * @property {boolean} [runsWhileHalted] 仕組みの停止中 (halt.mjs) も実行する。省略すると、停止中は実行しない
  */
 
 /**
@@ -68,7 +74,23 @@ import { startFeature } from './handlers/start-feature.mjs';
  * イベントごとの処理。作る順番に沿って追加していく。
  * @type {readonly Handler[]}
  */
-export const HANDLERS = [startFeature, closeParent, wakeWaitingStages, launchStage, requestReview, requestFix, detectConflicts];
+export const HANDLERS = [startFeature, closeParent, wakeWaitingStages, launchStage, requestReview, requestFix, detectUntrackedChanges, detectConflicts];
+
+/**
+ * 停止中の Issue に残すための、イベントの説明を作る。
+ *
+ * @param {Pick<AsyncFunctionArguments['context'], 'eventName' | 'payload'>} context
+ * @returns {string}
+ */
+export function describeEvent(context) {
+  const key = eventKey(context);
+  const number = context.payload.issue?.number ?? context.payload.pull_request?.number ?? context.payload.inputs?.['issue-number'];
+  if (number !== undefined && number !== '') {
+    return `\`${key}\` (#${number})`;
+  }
+  const sha = context.payload.after;
+  return typeof sha === 'string' ? `\`${key}\` (${sha.slice(0, 7)})` : `\`${key}\``;
+}
 
 /**
  * イベントから、ハンドラーを探すためのキーを作る。
@@ -162,7 +184,21 @@ export function createRouter(handlers) {
       const requests = [];
       /** @type {Set<number>} */
       const redispatch = new Set();
-      for (const handler of await findHandlers(args)) {
+      const handlersToRun = await findHandlers(args);
+
+      // 停止中は、停止中も動かすハンドラー (PR を通らない変更の検知) だけを実行し、ほかは処理しなかったことを残す
+      const haltIssue = handlersToRun.some((handler) => !handler.runsWhileHalted) ? await findHaltIssue(github, context.repo, config) : undefined;
+      if (haltIssue !== undefined) {
+        const skipped = handlersToRun.filter((handler) => !handler.runsWhileHalted).map((handler) => handler.name);
+        core.notice(`停止中 (#${haltIssue.number}) のため、処理しません: ${skipped.join('、')}`);
+        await github.rest.issues.createComment({
+          ...context.repo,
+          issue_number: haltIssue.number,
+          body: `🤖 停止中のため、${describeEvent(context)} の「${skipped.join('」「')}」を処理しませんでした。`,
+        });
+      }
+
+      for (const handler of handlersToRun.filter((candidate) => haltIssue === undefined || candidate.runsWhileHalted)) {
         core.info(`${handler.name} を実行します`);
         const result = await handler.run(args);
         requests.push(...(result.requests ?? []));

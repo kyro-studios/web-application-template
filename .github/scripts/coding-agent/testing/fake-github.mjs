@@ -47,6 +47,11 @@ export function createFakeGitHub({ actor, permissions = {} }) {
   const now = () => new Date((clock += 1000)).toISOString();
   /** @type {Map<number, FakePullRequest>} */
   const pulls = new Map();
+  /**
+   * 既定ブランチのコミット (push の前後の比較で返す順)。pulls は、コミットにひも付く PR
+   * @type {{ sha: string, message: string, files: { filename: string, status: string, previous_filename?: string }[], pulls: { number: number, merged_at: string | null }[] }[]}
+   */
+  const commits = [];
   /** リポジトリのラベル (名前の小文字をキーにする) */
   /** @type {Map<string, { name: string, color: string, description: string }>} */
   const labels = new Map();
@@ -158,6 +163,25 @@ export function createFakeGitHub({ actor, permissions = {} }) {
     rest: {
       pulls: pullsApi,
       repos: {
+        /** @param {{ per_page: number }} params */
+        compareCommitsWithBasehead: async ({ per_page }) => ({
+          data: {
+            total_commits: commits.length,
+            commits: commits.slice(0, per_page).map((commit) => ({ sha: commit.sha, commit: { message: commit.message } })),
+          },
+        }),
+        /** @param {{ ref: string, per_page: number, page: number }} params */
+        getCommit: async ({ ref, per_page, page }) => {
+          const commit = commits.find((candidate) => candidate.sha === ref);
+          if (commit === undefined) {
+            throw Object.assign(new Error('Not Found'), { status: 404 });
+          }
+          return { data: { sha: ref, files: structuredClone(commit.files.slice((page - 1) * per_page, page * per_page)) } };
+        },
+        /** @param {{ commit_sha: string }} params */
+        listPullRequestsAssociatedWithCommit: async ({ commit_sha }) => ({
+          data: structuredClone(commits.find((candidate) => candidate.sha === commit_sha)?.pulls ?? []),
+        }),
         /** @param {{ branch: string }} params */
         getBranch: async ({ branch }) => {
           const sha = branches[branch];
@@ -180,6 +204,14 @@ export function createFakeGitHub({ actor, permissions = {} }) {
         create: async ({ title, body, labels }) => ({ data: structuredClone(addIssue({ title, body, labels })) }),
         /** @param {{ issue_number: number }} params */
         get: async ({ issue_number }) => ({ data: structuredClone(getIssue(issue_number)) }),
+        /** @param {{ labels?: string, state?: 'open' | 'closed' }} params */
+        listForRepo: async ({ labels: label, state = 'open' }) => ({
+          data: structuredClone(
+            [...issues.values()].filter(
+              (issue) => issue.state === state && (label === undefined || issue.labels.some((candidate) => candidate.name === label)),
+            ),
+          ),
+        }),
         /** @param {{ issue_number: number, assignees: string[] }} params */
         addAssignees: async ({ issue_number, assignees }) => {
           const issue = getIssue(issue_number);
@@ -344,7 +376,7 @@ export function createFakeGitHub({ actor, permissions = {} }) {
     comments.push({ issue_number: issueNumber, body, user: { login }, created_at: now() });
   };
 
-  return { github, issues, comments, pulls, branches, events, labels, addIssue, addPull, addComment };
+  return { github, issues, comments, pulls, branches, events, labels, commits, addIssue, addPull, addComment };
 }
 
 /**
