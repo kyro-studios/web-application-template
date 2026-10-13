@@ -186,17 +186,35 @@ jobs:
             echo "$delimiter"
           } >> "$GITHUB_OUTPUT"
 
+      # サブスクの OAuth のトークンがあれば、API キーより優先する (仕様の 2.4)。秘密の値そのものは渡さない
+      - name: 認証の方式を確かめる
+        env:
+          HAS_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+          HAS_API_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        run: |
+          set -euo pipefail
+          if [ "$HAS_OAUTH_TOKEN" = 'true' ]; then
+            echo "Claude の認証: サブスクの OAuth のトークン (CLAUDE_CODE_OAUTH_TOKEN)"
+          elif [ "$HAS_API_KEY" = 'true' ]; then
+            echo "Claude の認証: API キー (ANTHROPIC_API_KEY)"
+          else
+            echo "::error::Secrets に CLAUDE_CODE_OAUTH_TOKEN も ANTHROPIC_API_KEY もありません"
+            exit 1
+          fi
+
       - name: Claude Code で作業する
         id: claude
         uses: anthropics/claude-code-action@v1
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Claude Code は両方あると API キーを使うため、OAuth のトークンがあるときは API キーを渡さない
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           # 読み取り専用の GITHUB_TOKEN を渡し、Claude GitHub App の書き込み可能なトークンを使わせない
           github_token: ${{ github.token }}
           # 振り分け用のワークフロー (github-actions[bot]) からの手動実行を許可する
           allowed_bots: github-actions
           # 文書の段階ではファイルを読み書きするだけ、実装計画では読むだけで、コマンドは実行しない。
-          # 実装タスクでは、コマンドも実行する (コマンドから API キーを読めるため、金額に上限のある専用のキーを使う。仕様の 6.3)
+          # 実装タスクでは、コマンドも実行する (コマンドから認証の値を読めるため、漏れたときの被害を抑える。仕様の 6.3)
           claude_args: >-
             --allowedTools "${{ steps.request.outputs.tools }}"
             --json-schema '${{ steps.request.outputs.output-schema }}'
@@ -391,13 +409,32 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           fi
 
+      # サブスクの OAuth のトークンがあれば、API キーより優先する (仕様の 2.4)。秘密の値そのものは渡さない
+      - name: 認証の方式を確かめる
+        if: steps.prompt.outputs.skip-review != 'true'
+        env:
+          HAS_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+          HAS_API_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        run: |
+          set -euo pipefail
+          if [ "$HAS_OAUTH_TOKEN" = 'true' ]; then
+            echo "Claude の認証: サブスクの OAuth のトークン (CLAUDE_CODE_OAUTH_TOKEN)"
+          elif [ "$HAS_API_KEY" = 'true' ]; then
+            echo "Claude の認証: API キー (ANTHROPIC_API_KEY)"
+          else
+            echo "::error::Secrets に CLAUDE_CODE_OAUTH_TOKEN も ANTHROPIC_API_KEY もありません"
+            exit 1
+          fi
+
       # 変更してよい範囲の外にあるファイルが変更されていれば、Claude を呼ばずに差し戻す (review.json は作成済み)
       - name: Claude Code でレビューする
         id: claude
         if: steps.prompt.outputs.skip-review != 'true'
         uses: anthropics/claude-code-action@v1
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Claude Code は両方あると API キーを使うため、OAuth のトークンがあるときは API キーを渡さない
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           # 読み取り専用の GITHUB_TOKEN を渡し、Claude GitHub App の書き込み可能なトークンを使わせない
           github_token: ${{ github.token }}
           # 振り分け用のワークフロー (github-actions[bot]) からの手動実行を許可する
