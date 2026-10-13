@@ -47,15 +47,7 @@ Organization の「Settings」→「Developer settings」→「GitHub Apps」→
 
 権限を後から変えた場合は、Organization にインストールした App の画面で、新しい権限を承認する必要があります。
 
-## 3. マシンユーザーを用意する
-
-エージェントごとに、Issue に Assign するための GitHub のアカウント (マシンユーザー) を 1 つずつ用意します。GitHub App の Bot は Issue の Assignee にできないためです。段階の Issue は、このアカウントが Assign されていることを条件に起動します。
-
-1. エージェントごとに GitHub のアカウントを作る (例: `<あなたの名前>-claude`、`<あなたの名前>-codex`)
-2. リポジトリの「Settings」→「Collaborators」で、それぞれを **Write** の権限で招待する
-3. それぞれのアカウントで招待を承認する
-
-## 4. Secrets を登録する
+## 3. Secrets を登録する
 
 Organization の「Settings」→「Secrets and variables」→「Actions」で、次の Secrets を登録します。「Repository access」で、1 で作ったリポジトリを選びます。名前はワークフローに書いてあるため、このとおりにしてください。
 
@@ -88,15 +80,16 @@ Claude は、API キーの代わりに、Claude の Pro や Max などのサブ�
 - そのため、この仕組みには**専用の API キー**を作り、**使える金額に上限を設けて**ください。漏れたときの被害を、上限の金額までに抑えるためです
 - 上限や自動のチャージ (Auto Renewal など) の設定が、意図せず外れていることがあります。上限が外れていないか、クレジットが残っているかを、ときどき確かめてください。クレジットが無くなると、エージェントのワークフローが `Quota exceeded` などで失敗します
 
-## 5. `agents.json` を編集する
+## 4. `agents.json` を編集する
 
-[agents.json](agents.json) に、2〜3 で用意したものを書きます。
+[agents.json](agents.json) に、2 で作った GitHub App の情報を書きます。
 
 | 項目 | 書くもの |
 | --- | --- |
 | `coordinator.bot`、`coordinator.appClientId` | 進行役の App の Bot 名と Client ID |
 | `agents.<識別子>.bot`、`agents.<識別子>.appClientId` | エージェントの App の Bot 名と Client ID |
-| `agents.<識別子>.assignee` | エージェントのマシンユーザーのアカウント名 |
+
+エージェントが担当する Issue には、担当のエージェントを表すラベル `agent:<識別子>` (例: `agent:claude`) が付きます。ラベルは、初めて付けるときに自動で作られるため、用意は要りません。識別子は 44 文字以内にしてください。
 
 `roles` には、段階ごとに、担当のエージェントと、使うモデルと effort が書いてあります。テンプレートの値のままでも動きます。変えるときは、次の点に気を付けてください。
 
@@ -115,9 +108,9 @@ npm ci --ignore-scripts
 npm test
 ```
 
-確かめたら、`main` にコミットして push します。次の 6 でルールセットを設定すると、`develop` には PR を通さないと変更を入れられなくなるため、`agents.json` はこの時点で入れておきます。
+確かめたら、`main` にコミットして push します。次の 5 でルールセットを設定すると、`develop` には PR を通さないと変更を入れられなくなるため、`agents.json` はこの時点で入れておきます。
 
-## 6. セットアップのスクリプトを実行する
+## 5. セットアップのスクリプトを実行する
 
 手元で、セットアップのスクリプトを実行します。次のことを行います。何度実行しても同じ状態になります。
 
@@ -143,7 +136,7 @@ node .github/scripts/coding-agent/setup-repository.mjs --repo <owner>/<name>
 | `--required-check <名前>` | `develop` で必須にするステータスチェック。複数指定できる。省略すると `commitlint` だけを必須にする |
 | `--main-bypass-team <slug>` | `main` を更新できる Team。複数指定できる。Organization のオーナーは、指定しなくても PR を通して更新できる |
 
-## 7. Variables を設定する
+## 6. Variables を設定する
 
 リポジトリの「Settings」→「Secrets and variables」→「Actions」→「Variables」で、次の値を設定します。`CODING_AGENT_ENABLED` を設定した時点で、仕組みが動き始めます。
 
@@ -153,10 +146,10 @@ node .github/scripts/coding-agent/setup-repository.mjs --repo <owner>/<name>
 | `REVIEW_MAX_FIX_ROUNDS` | エージェントが 1 つの PR を修正する回数の上限 | 3 |
 | `PLANNER_MAX_TASKS` | 1 回の実装計画で作成できる実装タスクの上限 | 30 |
 
-## 8. 動作を確かめる
+## 7. 動作を確かめる
 
 1. Issue の「New issue」で「新規機能」のフォームを選び、機能の親 Issue を作る。機能名は、英小文字・数字とハイフンにする
-2. 数十秒で、要件定義・仕様書・概念モデル・アーキテクチャ設計・実装計画の段階の Issue が、Sub Issue として作られることを確かめる
+2. 数十秒で、要件定義・仕様書・概念モデル・アーキテクチャ設計・実装計画の段階の Issue が、Sub Issue として作られることを確かめる。要件定義の Issue にはあなたが Assign され、ほかの段階の Issue には担当のエージェントのラベル (`agent:claude` など) が付く
 3. 要件定義の Issue に従って、要件定義書 (`docs/features/<番号>-<機能名>/requirements.md`) を書き、その Issue を Close する PR (本文に `Closes #<番号>`) を作る。Ready for review にすると、レビュー担当のレビューが始まる
 
 最初は、範囲の小さい機能で試すことをおすすめします。要件定義書の PR を Ready for review にした後は、実装まで自動で進み、API の料金がかかります。
@@ -186,4 +179,4 @@ gh workflow run coding-agent-router.yml -R <owner>/<name> -f issue-number=<番�
 
 ### エージェントを止める
 
-すべてを止めるときは、Variables の `CODING_AGENT_ENABLED` を `true` 以外にします。実装タスクの一部だけを止めるときは、まだ起動していないタスクの Issue から、エージェントのマシンユーザーの Assign を外します。Assign し直すと、依存先が解決していれば起動します。
+すべてを止めるときは、Variables の `CODING_AGENT_ENABLED` を `true` 以外にします。段階や実装タスクの一部だけを止めるときは、まだ起動していない Issue から、担当のエージェントのラベル (`agent:<識別子>`) を外します。ラベルを付け直すと、依存先が解決していれば起動します。
