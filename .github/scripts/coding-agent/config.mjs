@@ -12,7 +12,6 @@ import Ajv2020 from 'ajv/dist/2020.js';
 /**
  * @typedef {object} Agent
  * @property {string} name 表示名
- * @property {string} assignee Issue に Assign するアカウントのログイン名
  * @property {string} bot GitHub App の Bot 名 (<slug>[bot])
  * @property {string} workflow エージェントを動かすワークフローのファイル名
  * @property {string} appClientId GitHub App の Client ID
@@ -113,6 +112,9 @@ export const FEATURE_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 /** 機能名の長さの上限 */
 export const MAX_FEATURE_NAME_LENGTH = 50;
+
+/** 担当のエージェントを表すラベルの接頭辞。ラベルは agent:<識別子> */
+export const AGENT_LABEL_PREFIX = 'agent:';
 
 /** 設定の検証に失敗したことを表すエラー。errors に問題点の一覧を持つ */
 export class ConfigError extends Error {
@@ -226,8 +228,8 @@ export function validateAgentRelations(config) {
     }
   }
 
-  // Bot 名と Assignee からエージェントを引き当てるため、エージェントどうしで重複させない
-  for (const field of /** @type {const} */ (['bot', 'assignee', 'workflow'])) {
+  // Bot 名からエージェントを引き当てるため、エージェントどうしで重複させない
+  for (const field of /** @type {const} */ (['bot', 'workflow'])) {
     /** @type {Map<string, string>} */
     const owners = new Map();
     for (const [agentId, agent] of Object.entries(config.agents)) {
@@ -268,14 +270,30 @@ export function findAgentByBot(config, login) {
 }
 
 /**
- * Assignee のログイン名から、登録済みのエージェントを探す。
+ * 担当のエージェントを表すラベルを返す。
+ *
+ * @param {string} agentId エージェントの識別子
+ * @returns {string}
+ */
+export function agentLabel(agentId) {
+  return `${AGENT_LABEL_PREFIX}${agentId}`;
+}
+
+/**
+ * ラベルの名前から、登録済みのエージェントを探す。
  *
  * @param {AgentsConfig} config
- * @param {string | null | undefined} login 探すアカウントのログイン名
+ * @param {string | null | undefined} name 探すラベルの名前
  * @returns {RegisteredAgent | undefined}
  */
-export function findAgentByAssignee(config, login) {
-  return findAgent(config, 'assignee', login);
+export function findAgentByLabel(config, name) {
+  // GitHub のラベルの名前は大文字と小文字を区別しない
+  const lower = name?.toLowerCase();
+  if (!lower?.startsWith(AGENT_LABEL_PREFIX)) {
+    return undefined;
+  }
+  const agentId = lower.slice(AGENT_LABEL_PREFIX.length);
+  return Object.hasOwn(config.agents, agentId) ? getAgent(config, agentId) : undefined;
 }
 
 /**
@@ -401,7 +419,7 @@ export function expandStageFiles(config, stage, featureDir) {
 
 /**
  * @param {AgentsConfig} config
- * @param {'bot' | 'assignee'} field
+ * @param {'bot'} field
  * @param {string | null | undefined} login
  * @returns {RegisteredAgent | undefined}
  */

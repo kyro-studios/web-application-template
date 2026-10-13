@@ -9,8 +9,9 @@ import {
   ConfigError,
   expandStageFiles,
   featureDirectory,
-  findAgentByAssignee,
+  agentLabel,
   findAgentByBot,
+  findAgentByLabel,
   fixExecution,
   getAgent,
   getAuthor,
@@ -58,6 +59,19 @@ describe('loadConfig', () => {
         assert.ok(error.errors.some((message) => message.includes('workflow')));
         return true;
       });
+    });
+
+    it('担当のラベルが 50 文字を超える識別子を受け付けない', async () => {
+      const agents = createAgentsConfig();
+      for (const [id, valid] of [['a'.repeat(44), true], ['a'.repeat(45), false]]) {
+        const config = { ...agents, agents: { ...agents.agents, [id]: { ...agents.agents.claude, bot: 'other-app[bot]', workflow: 'other.yml' } } };
+        await writeFile(join(rootDir, CONFIG_DIR, 'agents.json'), JSON.stringify(config));
+        if (valid) {
+          await loadConfig(rootDir);
+        } else {
+          await assert.rejects(loadConfig(rootDir), ConfigError);
+        }
+      }
     });
 
     it('JSON として読めないファイルを ConfigError で報告する', async () => {
@@ -143,9 +157,13 @@ describe('エージェントの引き当て', () => {
     assert.equal(findAgentByBot(config, null), undefined);
   });
 
-  it('Assignee からエージェントを探せる', () => {
-    assert.equal(findAgentByAssignee(config, 'claude-account')?.id, 'claude');
-    assert.equal(findAgentByAssignee(config, 'claude-app[bot]'), undefined);
+  it('担当のラベルからエージェントを探せる (大文字と小文字は区別しない)', () => {
+    assert.equal(agentLabel('claude'), 'agent:claude');
+    assert.equal(findAgentByLabel(config, 'agent:claude')?.id, 'claude');
+    assert.equal(findAgentByLabel(config, 'Agent:Codex')?.id, 'codex');
+    for (const name of ['agent:devin', 'agent:toString', 'claude', 'stage:specification', '', undefined]) {
+      assert.equal(findAgentByLabel(config, name), undefined, String(name));
+    }
   });
 
   it('識別子からエージェントを取り出せる', () => {

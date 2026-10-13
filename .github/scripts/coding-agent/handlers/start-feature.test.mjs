@@ -21,7 +21,7 @@ function formBody(featureName) {
  * @param {string} [options.featureName]
  * @param {Record<string, string>} [options.permissions]
  */
-function setup({ featureName = 'user-login', permissions = { alice: 'write', 'claude-account': 'write' } } = {}) {
+function setup({ featureName = 'user-login', permissions = { alice: 'write' } } = {}) {
   const fake = createFakeGitHub({ actor: config.agents.coordinator.bot, permissions });
   const feature = fake.addIssue({ title: 'ログイン機能', body: formBody(featureName), labels: ['feature'], user: 'alice' });
 
@@ -67,7 +67,7 @@ describe('startFeature.matches', () => {
 });
 
 describe('startFeature.run', () => {
-  it('段階の Issue を横並びの Sub Issue として作り、Blocked by でつないで担当を Assign する', async () => {
+  it('段階の Issue を横並びの Sub Issue として作り、Blocked by でつないで担当を決める', async () => {
     const { fake, feature, run } = setup();
 
     const { requests, core } = await run('opened');
@@ -75,9 +75,10 @@ describe('startFeature.run', () => {
     assert.deepEqual(requests, []);
     assert.deepEqual(core.warnings, []);
     const stageIssues = stageIssuesOf(fake, feature.number);
+    // 要件定義は機能の親 Issue の作成者を Assign し、ほかの段階は作成担当のラベルを付ける
     assert.deepEqual(
       stageIssues.map((issue) => issue.labels.map((label) => label.name)),
-      FEATURE_STAGES.map((stage) => [`stage:${stage.id}`]),
+      FEATURE_STAGES.map((stage) => (stage.id === 'requirements' ? [`stage:${stage.id}`] : [`stage:${stage.id}`, 'agent:claude'])),
     );
     assert.ok(stageIssues.every((issue) => issue.user.login === config.agents.coordinator.bot));
     assert.equal(stageIssues[0].title, '要件定義: ログイン機能');
@@ -90,7 +91,12 @@ describe('startFeature.run', () => {
     );
     assert.deepEqual(
       stageIssues.map((issue) => issue.assignees.map((user) => user.login)),
-      [['alice'], ['claude-account'], ['claude-account'], ['claude-account'], ['claude-account']],
+      [['alice'], [], [], [], []],
+    );
+    // 担当のラベルは、Issue を作るときではなく、最後に付ける (付けたときに起動するため)
+    assert.deepEqual(
+      fake.events.map((event) => [event.issue_number, event.label?.name]),
+      stageIssues.slice(1).map((issue) => [issue.number, 'agent:claude']),
     );
 
     assert.equal(fake.comments.length, 1);
@@ -149,12 +155,13 @@ describe('startFeature.run', () => {
     assert.equal(fake.comments.length, 0);
   });
 
-  it('Assign できなかった担当を警告する', async () => {
-    const { run } = setup({ permissions: { alice: 'write' } });
+  it('担当のラベルが無ければ作り、あれば作り直さない', async () => {
+    const { fake, run } = setup();
+    fake.labels.set('agent:codex', { name: 'agent:codex', color: '000000', description: '既存' });
 
-    const { core } = await run('opened');
+    await run('opened');
 
-    assert.equal(core.warnings.length, FEATURE_STAGES.length - 1);
-    assert.match(core.warnings[0], /claude-account を Assign できませんでした/);
+    assert.deepEqual(fake.labels.get('agent:claude'), { name: 'agent:claude', color: '5319e7', description: '担当のエージェント: claude' });
+    assert.equal(fake.labels.get('agent:codex')?.description, '既存');
   });
 });

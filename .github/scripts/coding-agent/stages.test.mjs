@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { AUTHORED_STAGES, loadConfig } from './config.mjs';
+import { AGENT_LABEL_PREFIX, AUTHORED_STAGES, loadConfig } from './config.mjs';
 import { LABELS } from './setup-repository.mjs';
 import { FEATURE_LABEL, FEATURE_STAGES, IMPLEMENTATION_STAGE, getFeatureStage, stageIssueBody, stageLabel, stageOf } from './stages.mjs';
 
@@ -39,6 +39,12 @@ describe('振り分け用のワークフローの起動の条件', () => {
     const { readFile } = await import('node:fs/promises');
     const workflow = await readFile(new URL('../../workflows/coding-agent-router.yml', import.meta.url), 'utf8');
     assert.ok(workflow.includes(`contains(github.event.issue.labels.*.name, '${FEATURE_LABEL}')`));
+  });
+
+  it('担当のエージェントのラベルが付いたときに起動する', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const workflow = await readFile(new URL('../../workflows/coding-agent-router.yml', import.meta.url), 'utf8');
+    assert.ok(workflow.includes(`startsWith(github.event.label.name, '${AGENT_LABEL_PREFIX}')`));
   });
 });
 
