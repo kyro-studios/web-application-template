@@ -4,18 +4,18 @@
  * - wakeWaitingStages: Issue が Close されたら、それを待っていた Issue (親 Issue と Blocking していた Issue) のうち、
  *   起動できるものごとに振り分けをやり直す。1 回の Close で複数の Issue が起動できるようになることがあり、
  *   Issue ごとの concurrency で処理を 1 つずつに絞るため
- * - launchStage: Issue が Assign されたときや、振り分けをやり直したとき (手動実行を含む) に、起動の条件を確かめて
- *   作成を依頼する。同じ Issue では、二重に起動しないよう、Issue に印となるコメントを残す
+ * - launchStage: Issue に担当のラベル (agent:<識別子>) が付いたときや、振り分けをやり直したとき (手動実行を含む) に、
+ *   起動の条件を確かめて作成を依頼する。同じ Issue では、二重に起動しないよう、Issue に印となるコメントを残す
  *
  * 起動の条件は、次のすべてを満たすこと。
- * - 進行役の App が作った、Open の段階の Issue で、その段階の作成担当が Assign されている
+ * - 進行役の App が作った、Open の段階の Issue で、その段階の作成担当のラベルが付いている
  *   - 文書の段階と実装計画の作成担当は、agents.json の roles.<段階>.author で決まる
- *   - 実装タスクの作成担当は、roles.implementation.implementers のうち、Issue に Assign されているエージェント (実装計画で割り当てたもの)
+ *   - 実装タスクの作成担当は、roles.implementation.implementers のうち、Issue にラベルが付いているエージェント (実装計画で割り当てたもの)
  * - すべての依存先 (Sub Issue と Blocked by の Issue) が Close され、紐づく PR に Open のまま残っているものが無い
  */
 
 import { isTrustedActor } from '../actors.mjs';
-import { expandStageFiles, featureDirectory, findAgentByAssignee, getAuthor, getImplementers, isCoordinator, isValidFeatureName } from '../config.mjs';
+import { agentLabel, expandStageFiles, featureDirectory, findAgentByLabel, getAuthor, getImplementers, isCoordinator, isValidFeatureName } from '../config.mjs';
 import { maxPlanTasks } from '../create-tasks.mjs';
 import { findLabeledAncestor, findUnresolvedDependencies, findWaitingIssueNumbers, measureIssueDepth } from '../github-issues.mjs';
 import { MAX_SUB_ISSUE_LEVELS } from '../plan-validation.mjs';
@@ -56,25 +56,28 @@ async function checkLaunchable({ github, context, config }, issue) {
     return { reason: `「${stage}」の段階の起動には、まだ対応していません` };
   }
   const creatable = /** @type {typeof CREATABLE_STAGES[number]} */ (stage);
-  const assignees = (issue.assignees ?? []).map((user) => user.login.toLowerCase());
+  // 担当のラベル (agent:<識別子>) が付いているエージェント
+  const labeled = new Set(
+    issue.labels.flatMap((label) => findAgentByLabel(config.agents, typeof label === 'string' ? label : label.name)?.id ?? []),
+  );
   /** @type {ResolvedAssignment} */
   let author;
   if (creatable === IMPLEMENTATION_STAGE) {
-    // 実装タスクは、実装計画で割り当てたエージェント (Assign されている実装担当) が作成する
-    const candidates = getImplementers(config.agents).filter((implementer) => assignees.includes(implementer.agent.assignee.toLowerCase()));
+    // 実装タスクは、実装計画で割り当てたエージェント (ラベルの付いている実装担当) が作成する
+    const candidates = getImplementers(config.agents).filter((implementer) => labeled.has(implementer.agent.id));
     if (candidates.length !== 1) {
       return {
         reason:
           candidates.length === 0
-            ? '実装担当のエージェントが Assign されていません (人が対応するタスクか、子タスクをまとめるタスクです)'
-            : `実装担当のエージェントが複数 Assign されています: ${candidates.map((candidate) => candidate.agent.assignee).join('、')}`,
+            ? '実装担当のエージェントのラベルが付いていません (人が対応するタスクか、子タスクをまとめるタスクです)'
+            : `実装担当のエージェントのラベルが複数付いています: ${candidates.map((candidate) => agentLabel(candidate.agent.id)).join('、')}`,
       };
     }
     author = candidates[0];
   } else {
     author = getAuthor(config.agents, creatable);
-    if (!assignees.includes(author.agent.assignee.toLowerCase())) {
-      return { reason: `作成担当 (${author.agent.assignee}) が Assign されていません` };
+    if (!labeled.has(author.agent.id)) {
+      return { reason: `作成担当のラベル (${agentLabel(author.agent.id)}) が付いていません` };
     }
   }
   const unresolved = await findUnresolvedDependencies(github, context.repo, issue.number);
@@ -113,11 +116,11 @@ export const wakeWaitingStages = {
 /** @type {Handler} */
 export const launchStage = {
   name: '段階の起動',
-  events: ['issues.assigned', 'workflow_dispatch'],
+  events: ['issues.labeled', 'workflow_dispatch'],
   matches: async ({ context, config }) => {
-    // Assign されたのが、作成担当のエージェントのときだけ処理する
+    // 付いたのが、登録済みのエージェントのラベルのときだけ処理する
     if (context.eventName === 'issues') {
-      return findAgentByAssignee(config.agents, context.payload.assignee?.login) !== undefined;
+      return findAgentByLabel(config.agents, context.payload.label?.name) !== undefined;
     }
     return true;
   },

@@ -1,6 +1,8 @@
 /**
- * Issue の権限、Sub Issue、Blocked by を扱う GitHub API の呼び出し。
+ * Issue の権限、Sub Issue、Blocked by、ラベルを扱う GitHub API の呼び出し。
  */
+
+import { agentLabel } from './config.mjs';
 
 /**
  * actions/github-script がスクリプトに渡す引数
@@ -25,7 +27,6 @@
  * @property {'open' | 'closed'} state
  * @property {{ login: string } | null} user
  * @property {(string | { name?: string })[]} labels
- * @property {{ login: string }[] | null} [assignees]
  */
 
 /** 書き込み権限とみなすリポジトリの権限 */
@@ -310,4 +311,39 @@ export async function findLabeledAncestor(github, repository, issueNumber, label
  */
 export function hasLabel(labels, name) {
   return labels.some((label) => (typeof label === 'string' ? label : label.name) === name);
+}
+
+/** 担当のエージェントを表すラベルの色 */
+const AGENT_LABEL_COLOR = '5319e7';
+
+/**
+ * 担当のエージェントを表すラベル (agent:<識別子>) が無ければ作る。エージェントを登録したときに、
+ * セットアップをやり直さずに済むようにするため。存在しないラベルを Issue に付けたときの振る舞いは、
+ * 公式のドキュメントで確かめられないため、付ける前に作っておく。
+ *
+ * @param {GitHub} github
+ * @param {Repository} repository
+ * @param {readonly import('./config.mjs').RegisteredAgent[]} agents
+ */
+export async function ensureAgentLabels(github, repository, agents) {
+  const unique = new Map(agents.map((agent) => [agent.id, agent]));
+  for (const agent of unique.values()) {
+    const name = agentLabel(agent.id);
+    try {
+      await github.rest.issues.getLabel({ ...repository, name });
+      continue;
+    } catch (error) {
+      if (/** @type {{ status?: number }} */ (error).status !== 404) {
+        throw error;
+      }
+    }
+    try {
+      await github.rest.issues.createLabel({ ...repository, name, color: AGENT_LABEL_COLOR, description: `担当のエージェント: ${agent.name}`.slice(0, 100) });
+    } catch (error) {
+      // ほかの実行が同時に作った場合は、作成済み (422) になる
+      if (/** @type {{ status?: number }} */ (error).status !== 422) {
+        throw error;
+      }
+    }
+  }
 }

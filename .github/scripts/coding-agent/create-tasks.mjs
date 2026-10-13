@@ -2,9 +2,9 @@
  * 実装計画の作成担当が出力した計画を検証し、進行役の GitHub App で実装タスクの Issue を作成する。
  *
  * エージェントが依存関係を設定する前に起動しないよう、次の順番で処理する。
- * 1. すべての Issue を親タスクから順に作成し、Sub Issue として紐づける (Assignee なし)
+ * 1. すべての Issue を親タスクから順に作成し、Sub Issue として紐づける (担当のラベルなし)
  * 2. Blocked by の関係を設定する
- * 3. 最後に担当を Assign する (ここで、依存先の無いタスクが起動する)
+ * 3. 最後に担当のラベル (agent:<識別子>) を付ける (ここで、依存先の無いタスクが起動する)
  *
  * 本文に埋め込んだ印 (実行の ID とタスクの key) で作成済みの Issue を見分けるため、
  * 途中で失敗しても、同じ実行を再実行すれば続きから処理する。
@@ -19,8 +19,8 @@
  */
 
 import { readFile } from 'node:fs/promises';
-import { ConfigError, getAgent, getImplementers, isCoordinator, loadConfig } from './config.mjs';
-import { addBlockedBy, addSubIssue, getBlockedBy, listSubIssues, measureIssueDepth } from './github-issues.mjs';
+import { agentLabel, ConfigError, getAgent, getImplementers, isCoordinator, loadConfig } from './config.mjs';
+import { addBlockedBy, addSubIssue, ensureAgentLabels, getBlockedBy, listSubIssues, measureIssueDepth } from './github-issues.mjs';
 import { MAX_SUB_ISSUE_LEVELS, MAX_SUB_ISSUES, measureDepth, validatePlan } from './plan-validation.mjs';
 import { IMPLEMENTATION_STAGE, stageLabel, stageOf } from './stages.mjs';
 
@@ -187,7 +187,12 @@ export default async function createTasks({ github, context, core, writeInterval
     }
   }
 
-  // 3. 最後に担当を Assign する
+  // 3. 最後に担当のラベルを付ける
+  await ensureAgentLabels(
+    github,
+    repository,
+    plan.tasks.flatMap((task) => (task.agent === null ? [] : [getAgent(config.agents, task.agent)])),
+  );
   /** @type {string[]} */
   const lines = [];
   for (const task of plan.tasks) {
@@ -196,12 +201,9 @@ export default async function createTasks({ github, context, core, writeInterval
       lines.push(`- #${issue.number} ${task.title} (担当: 人)`);
       continue;
     }
-    const assignee = getAgent(config.agents, task.agent).assignee;
-    const { data } = await github.rest.issues.addAssignees({ ...repository, issue_number: issue.number, assignees: [assignee] });
-    if (!(data.assignees ?? []).some((user) => user.login.toLowerCase() === assignee.toLowerCase())) {
-      core.warning(`#${issue.number} に ${assignee} を Assign できませんでした (リポジトリのコラボレーターか確認してください)`);
-    }
-    lines.push(`- #${issue.number} ${task.title} (担当: \`${assignee}\`)`);
+    const agent = getAgent(config.agents, task.agent);
+    await github.rest.issues.addLabels({ ...repository, issue_number: issue.number, labels: [agentLabel(agent.id)] });
+    lines.push(`- #${issue.number} ${task.title} (担当: ${agent.name})`);
     await pause();
   }
 

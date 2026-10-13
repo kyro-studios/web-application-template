@@ -47,6 +47,9 @@ export function createFakeGitHub({ actor, permissions = {} }) {
   const now = () => new Date((clock += 1000)).toISOString();
   /** @type {Map<number, FakePullRequest>} */
   const pulls = new Map();
+  /** リポジトリのラベル (名前の小文字をキーにする) */
+  /** @type {Map<string, { name: string, color: string, description: string }>} */
+  const labels = new Map();
   let nextNumber = 1;
 
   /**
@@ -193,10 +196,26 @@ export function createFakeGitHub({ actor, permissions = {} }) {
           comments.push({ issue_number, body, user: { login: actor }, created_at: now() });
           return { data: {} };
         },
+        /** @param {{ name: string }} params */
+        getLabel: async ({ name }) => {
+          const label = labels.get(name.toLowerCase());
+          if (label === undefined) {
+            throw Object.assign(new Error('Not Found'), { status: 404 });
+          }
+          return { data: structuredClone(label) };
+        },
+        /** @param {{ name: string, color: string, description: string }} params */
+        createLabel: async ({ name, color, description }) => {
+          if (labels.has(name.toLowerCase())) {
+            throw Object.assign(new Error('Validation Failed'), { status: 422 });
+          }
+          labels.set(name.toLowerCase(), { name, color, description });
+          return { data: { name, color, description } };
+        },
         /** @param {{ issue_number: number, labels: string[] }} params */
-        addLabels: async ({ issue_number, labels }) => {
+        addLabels: async ({ issue_number, labels: names }) => {
           const issue = getIssue(issue_number);
-          for (const name of labels) {
+          for (const name of names) {
             if (!issue.labels.some((label) => label.name === name)) {
               issue.labels.push({ name });
               events.push({ issue_number, event: 'labeled', label: { name }, created_at: now() });
@@ -325,7 +344,7 @@ export function createFakeGitHub({ actor, permissions = {} }) {
     comments.push({ issue_number: issueNumber, body, user: { login }, created_at: now() });
   };
 
-  return { github, issues, comments, pulls, branches, events, addIssue, addPull, addComment };
+  return { github, issues, comments, pulls, branches, events, labels, addIssue, addPull, addComment };
 }
 
 /**

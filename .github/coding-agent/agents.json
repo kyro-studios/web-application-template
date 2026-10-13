@@ -7,7 +7,6 @@
   "agents": {
     "claude": {
       "name": "Claude Code",
-      "assignee": "your-claude-account",
       "bot": "your-claude-app[bot]",
       "workflow": "coding-agent-claude.yml",
       "appClientId": "your-claude-app-client-id",
@@ -15,7 +14,6 @@
     },
     "codex": {
       "name": "Codex",
-      "assignee": "your-codex-account",
       "bot": "your-codex-app[bot]",
       "workflow": "coding-agent-codex.yml",
       "appClientId": "your-codex-app-client-id",

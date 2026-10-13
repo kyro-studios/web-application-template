@@ -2,14 +2,14 @@
  * 機能の開始: 「新規機能」の Issue フォームで作られた機能の親 Issue に、段階の Issue を作成する。
  *
  * 段階の Issue は、機能の親 Issue の Sub Issue として横並びに作り、Blocked by で順につなぐ。
- * Assign は最後に行い、依存関係を設定する前にエージェントが起動しないようにする。
+ * 担当の Assign とラベル (agent:<識別子>) は最後に付け、依存関係を設定する前にエージェントが起動しないようにする。
  * 作成済みの段階の Issue や関係は飛ばすため、途中で失敗しても、もう一度実行すれば続きから処理する。
  *
  * 本文の機能名が正しくなければ段階の Issue を作らずに知らせ、本文が編集されたときに改めて処理する。
  */
 
-import { featureDirectory, getAuthor, isCoordinator, isValidFeatureName, MAX_FEATURE_NAME_LENGTH } from '../config.mjs';
-import { addBlockedBy, addSubIssue, getBlockedBy, hasLabel, hasWritePermission, listSubIssues } from '../github-issues.mjs';
+import { agentLabel, featureDirectory, getAuthor, isCoordinator, isValidFeatureName, MAX_FEATURE_NAME_LENGTH } from '../config.mjs';
+import { addBlockedBy, addSubIssue, ensureAgentLabels, getBlockedBy, hasLabel, hasWritePermission, listSubIssues } from '../github-issues.mjs';
 import { FEATURE_NAME_FIELD, parseIssueForm } from '../issue-form.mjs';
 import { FEATURE_LABEL, FEATURE_STAGES, stageIssueBody, stageLabel, stageOf } from '../stages.mjs';
 
@@ -96,17 +96,25 @@ export const startFeature = {
       }
     }
 
-    // 最後に担当を Assign する。要件定義は機能の親 Issue の作成者が担当する
+    // 最後に担当を決める。要件定義は機能の親 Issue の作成者を Assign し、ほかの段階は作成担当のラベルを付ける
+    await ensureAgentLabels(
+      github,
+      repository,
+      FEATURE_STAGES.filter((stage) => stage.id !== 'requirements').map((stage) => getAuthor(config.agents, stage.id).agent),
+    );
     /** @type {string[]} */
     const lines = [];
     for (const [index, stage] of FEATURE_STAGES.entries()) {
       const issue = stageIssues[index];
-      const assignee = stage.id === 'requirements' ? author : getAuthor(config.agents, stage.id).agent.assignee;
-      const { data } = await github.rest.issues.addAssignees({ ...repository, issue_number: issue.number, assignees: [assignee] });
-      if (!(data.assignees ?? []).some((user) => user.login.toLowerCase() === assignee.toLowerCase())) {
-        core.warning(`#${issue.number} に ${assignee} を Assign できませんでした (リポジトリのコラボレーターか確認してください)`);
+      if (stage.id === 'requirements') {
+        // 作成者は書き込み権限を持つことを確かめてあるため、Assign できる
+        await github.rest.issues.addAssignees({ ...repository, issue_number: issue.number, assignees: [author] });
+        lines.push(`- #${issue.number} ${stage.name} (担当: \`${author}\`)`);
+      } else {
+        const { agent } = getAuthor(config.agents, stage.id);
+        await github.rest.issues.addLabels({ ...repository, issue_number: issue.number, labels: [agentLabel(agent.id)] });
+        lines.push(`- #${issue.number} ${stage.name} (担当: ${agent.name})`);
       }
-      lines.push(`- #${issue.number} ${stage.name} (担当: \`${assignee}\`)`);
     }
 
     if (created.length > 0) {

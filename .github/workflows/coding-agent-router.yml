@@ -2,7 +2,7 @@ name: Coding Agent Router
 
 on:
   issues:
-    types: [opened, edited, assigned, closed]
+    types: [opened, edited, labeled, closed]
   # 振り分けの処理は既定ブランチのものを使い、PR のコードは実行しない (PR の変更で振り分けを書き換えられないようにする)
   pull_request_target:
     types: [opened, reopened, ready_for_review, synchronize, unlabeled]
@@ -30,16 +30,17 @@ jobs:
     # 細かい判定は各ハンドラーの matches に任せる
     # - push: 既定ブランチへのものだけ (エージェントのブランチへの push では起動しない)
     # - Issue の作成と編集: feature ラベルの付いた Issue (機能の開始) だけ。段階の Issue や実装タスクの Issue の作成では起動しない
-    # - Issue の Assign と Close、PR のイベント (on の types で絞ってある)、手動実行: 常に
+    # - Issue のラベル付け: 担当のエージェントのラベル (agent:<識別子>) だけ (段階の起動)。startsWith は大文字と小文字を区別しない
+    # - Issue の Close、PR のイベント (on の types で絞ってある)、手動実行: 常に
     if: >-
       vars.CODING_AGENT_ENABLED == 'true' && (
         github.event_name == 'workflow_dispatch' ||
         github.event_name == 'pull_request_target' ||
         (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
         (github.event_name == 'issues' && (
-          github.event.action == 'assigned' ||
           github.event.action == 'closed' ||
-          contains(github.event.issue.labels.*.name, 'feature')
+          (github.event.action == 'labeled' && startsWith(github.event.label.name, 'agent:')) ||
+          ((github.event.action == 'opened' || github.event.action == 'edited') && contains(github.event.issue.labels.*.name, 'feature'))
         ))
       )
     runs-on: ubuntu-latest

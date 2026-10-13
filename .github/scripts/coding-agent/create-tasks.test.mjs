@@ -125,7 +125,7 @@ describe('createTasks', () => {
     ],
   };
 
-  it('計画から実装タスクの Issue を作り、親子関係と Blocked by を設定して、担当を Assign する', async () => {
+  it('計画から実装タスクの Issue を作り、親子関係と Blocked by を設定して、担当のラベルを付ける', async () => {
     const { fake, planning } = await setup(plan);
 
     const core = await run(fake);
@@ -133,8 +133,8 @@ describe('createTasks', () => {
     assert.deepEqual(core.failures, []);
     const [setupTask, featureTask, api, ui] = ['setup', 'feature', 'api', 'ui'].map((key) => findTask(fake, key));
     for (const issue of [setupTask, featureTask, api, ui]) {
-      assert.deepEqual(issue.labels, [{ name: 'stage:implementation' }]);
       assert.equal(issue.user.login, config.agents.coordinator.bot);
+      assert.deepEqual(issue.assignees, []);
     }
     assert.equal(setupTask.title, 'タスク setup');
     assert.match(setupTask.body, /^setup の本文\n\n---\n🤖 #\d+ の実装計画から作成しました/);
@@ -147,9 +147,14 @@ describe('createTasks', () => {
     assert.deepEqual(api.blockedBy, [setupTask.number]);
     assert.deepEqual(ui.blockedBy.sort(), [setupTask.number, api.number].sort());
 
-    // 担当が null のタスクは Assign しない
-    assert.deepEqual(featureTask.assignees, []);
-    assert.deepEqual(api.assignees.map((user) => user.login), ['claude-account']);
+    // 担当が null のタスクには、担当のラベルを付けない
+    assert.deepEqual(featureTask.labels, [{ name: 'stage:implementation' }]);
+    for (const issue of [setupTask, api, ui]) {
+      assert.deepEqual(issue.labels, [{ name: 'stage:implementation' }, { name: 'agent:claude' }]);
+    }
+    // 担当のラベルは、Issue を作るときではなく、最後に付ける (付けたときに起動するため)
+    assert.ok(fake.events.every((event) => event.event === 'labeled' && event.label?.name === 'agent:claude'));
+    assert.equal(fake.labels.get('agent:claude')?.name, 'agent:claude');
 
     const summary = fake.comments.at(-1);
     assert.equal(summary?.issue_number, planning.number);

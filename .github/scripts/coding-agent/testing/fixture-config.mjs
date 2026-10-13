@@ -21,7 +21,6 @@ export const ROOT_DIR = fileURLToPath(new URL('../../../../', import.meta.url));
 function fixtureAgent(id) {
   return {
     name: id,
-    assignee: `${id}-account`,
     bot: `${id}-app[bot]`,
     workflow: `coding-agent-${id}.yml`,
     appClientId: `${id}-client-id`,

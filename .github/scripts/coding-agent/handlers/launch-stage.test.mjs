@@ -23,9 +23,9 @@ function setup() {
     fake.addIssue({
       title: `${stage}: ログイン機能`,
       body: `${stage} の段階`,
-      labels: [`stage:${stage}`],
+      labels: stage === 'requirements' ? [`stage:${stage}`] : [`stage:${stage}`, 'agent:claude'],
       parent: feature.number,
-      assignees: [stage === 'requirements' ? 'alice' : 'claude-account'],
+      assignees: stage === 'requirements' ? ['alice'] : [],
     }),
   );
   for (let index = 1; index < stages.length; index++) {
@@ -114,13 +114,14 @@ describe('wakeWaitingStages', () => {
 });
 
 describe('launchStage.matches', () => {
-  it('作成担当のエージェントが Assign されたときと、手動実行のときに処理する', async () => {
+  it('登録済みのエージェントのラベルが付いたときと、手動実行のときに処理する', async () => {
     /** @param {object} context */
     // @ts-expect-error テストに必要な部分だけを渡す
     const matches = (context) => launchStage.matches({ context, config });
 
-    assert.equal(await matches({ eventName: 'issues', payload: { action: 'assigned', assignee: { login: 'Claude-Account' } } }), true);
-    assert.equal(await matches({ eventName: 'issues', payload: { action: 'assigned', assignee: { login: 'alice' } } }), false);
+    assert.equal(await matches({ eventName: 'issues', payload: { action: 'labeled', label: { name: 'Agent:Claude' } } }), true);
+    assert.equal(await matches({ eventName: 'issues', payload: { action: 'labeled', label: { name: 'agent:devin' } } }), false);
+    assert.equal(await matches({ eventName: 'issues', payload: { action: 'labeled', label: { name: 'stage:specification' } } }), false);
     assert.equal(await matches(dispatchContext(3)), true);
   });
 });
@@ -167,9 +168,9 @@ describe('launchStage.run', () => {
     assert.equal(fake.comments.length, 0);
   });
 
-  it('実装タスクの作成を、Assign されている実装担当に依頼する', async () => {
+  it('実装タスクの作成を、ラベルの付いている実装担当に依頼する', async () => {
     const { fake, planning } = setup();
-    const task = fake.addIssue({ title: 'バックエンドの土台を作る', body: 'Gradle で作る', labels: ['stage:implementation'], parent: planning.number, assignees: ['claude-account'] });
+    const task = fake.addIssue({ title: 'バックエンドの土台を作る', body: 'Gradle で作る', labels: ['stage:implementation', 'agent:claude'], parent: planning.number });
 
     const { result } = await run(fake, dispatchContext(task.number), launchStage);
 
@@ -190,9 +191,9 @@ describe('launchStage.run', () => {
 
   it('実装タスクは、依存先のタスクと子タスクがすべて完了するまで起動しない', async () => {
     const { fake, planning } = setup();
-    const foundation = fake.addIssue({ labels: ['stage:implementation'], parent: planning.number, assignees: ['claude-account'] });
-    const parentTask = fake.addIssue({ labels: ['stage:implementation'], parent: planning.number, assignees: ['claude-account'] });
-    const child = fake.addIssue({ labels: ['stage:implementation'], parent: parentTask.number, assignees: ['claude-account'] });
+    const foundation = fake.addIssue({ labels: ['stage:implementation', 'agent:claude'], parent: planning.number });
+    const parentTask = fake.addIssue({ labels: ['stage:implementation', 'agent:claude'], parent: planning.number });
+    const child = fake.addIssue({ labels: ['stage:implementation', 'agent:claude'], parent: parentTask.number });
     child.blockedBy.push(foundation.number);
 
     assert.deepEqual((await run(fake, dispatchContext(child.number), launchStage)).result, {});
@@ -205,19 +206,19 @@ describe('launchStage.run', () => {
     assert.deepEqual((await run(fake, closedContext(child.number, 'codex-app[bot]'), wakeWaitingStages)).result, { redispatch: [parentTask.number] });
   });
 
-  it('実装担当のエージェントが Assign されていないか、複数 Assign されている実装タスクは起動しない', async () => {
+  it('実装担当のエージェントのラベルが無いか、複数付いている実装タスクは起動しない', async () => {
     const { fake, planning } = setup();
     const humanTask = fake.addIssue({ labels: ['stage:implementation'], parent: planning.number, assignees: ['alice'] });
     assert.deepEqual((await run(fake, dispatchContext(humanTask.number), launchStage)).result, {});
 
     // レビュー担当 (codex) は実装担当ではないため、担当として数えない
-    const reviewerTask = fake.addIssue({ labels: ['stage:implementation'], parent: planning.number, assignees: ['codex-account'] });
+    const reviewerTask = fake.addIssue({ labels: ['stage:implementation', 'agent:codex'], parent: planning.number });
     assert.deepEqual((await run(fake, dispatchContext(reviewerTask.number), launchStage)).result, {});
 
-    config.agents.agents.devin = { ...config.agents.agents.claude, name: 'devin', assignee: 'devin-account', bot: 'devin-app[bot]' };
+    config.agents.agents.devin = { ...config.agents.agents.claude, name: 'devin', bot: 'devin-app[bot]' };
     config.agents.roles.implementation.implementers.push({ agent: 'devin' });
     try {
-      const sharedTask = fake.addIssue({ labels: ['stage:implementation'], parent: planning.number, assignees: ['claude-account', 'devin-account'] });
+      const sharedTask = fake.addIssue({ labels: ['stage:implementation', 'agent:claude', 'agent:devin'], parent: planning.number });
       assert.deepEqual((await run(fake, dispatchContext(sharedTask.number), launchStage)).result, {});
     } finally {
       delete config.agents.agents.devin;
@@ -245,15 +246,16 @@ describe('launchStage.run', () => {
     );
   });
 
-  it('作成担当が Assign されていない Issue や、進行役の App が作っていない Issue は起動しない', async () => {
+  it('作成担当のラベルが無い Issue や、進行役の App が作っていない Issue は起動しない', async () => {
     const { fake, requirements, specification } = setup();
     close(fake, requirements.number);
     const issue = fake.issues.get(specification.number);
     assert.ok(issue);
-    issue.assignees = [];
+    // 作成担当でないエージェントのラベルでは起動しない
+    issue.labels = [{ name: 'stage:specification' }, { name: 'agent:codex' }];
     assert.deepEqual((await run(fake, dispatchContext(specification.number), launchStage)).result, {});
 
-    const humanIssue = fake.addIssue({ labels: ['stage:specification'], user: 'alice', assignees: ['claude-account'] });
+    const humanIssue = fake.addIssue({ labels: ['stage:specification', 'agent:claude'], user: 'alice' });
     assert.deepEqual((await run(fake, dispatchContext(humanIssue.number), launchStage)).result, {});
   });
 

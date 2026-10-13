@@ -17,10 +17,10 @@
       "additionalProperties": false
     },
     "agents": {
-      "description": "登録するエージェント。キーはエージェントの識別子",
+      "description": "登録するエージェント。キーはエージェントの識別子。担当を表すラベル (agent:<識別子>) を 50 文字以内に収めるため、識別子は 44 文字以内にする",
       "type": "object",
       "propertyNames": {
-        "pattern": "^[a-z][a-z0-9-]{0,49}$"
+        "pattern": "^[a-z][a-z0-9-]{0,43}$"
       },
       "minProperties": 1,
       "additionalProperties": {
@@ -77,7 +77,7 @@
   "$defs": {
     "agentId": {
       "type": "string",
-      "pattern": "^[a-z][a-z0-9-]{0,49}$"
+      "pattern": "^[a-z][a-z0-9-]{0,43}$"
     },
     "bot": {
       "description": "GitHub App の Bot 名 (<slug>[bot])",
@@ -137,11 +137,6 @@
           "type": "string",
           "minLength": 1
         },
-        "assignee": {
-          "description": "Issue に Assign するアカウント (マシンユーザー) のログイン名",
-          "type": "string",
-          "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$"
-        },
         "bot": { "$ref": "#/$defs/bot" },
         "workflow": {
           "description": "エージェントを動かすワークフローのファイル名",
@@ -154,7 +149,7 @@
           "$ref": "#/$defs/execution"
         }
       },
-      "required": ["name", "assignee", "bot", "workflow", "appClientId"],
+      "required": ["name", "bot", "workflow", "appClientId"],
       "additionalProperties": false
     }
   }
