@@ -43,6 +43,7 @@
         "specification": { "$ref": "#/$defs/reviewedStage" },
         "domain-model": { "$ref": "#/$defs/reviewedStage" },
         "architecture": { "$ref": "#/$defs/reviewedStage" },
+        "project": { "$ref": "#/$defs/reviewedStage" },
         "planning": {
           "description": "実装計画。レビューは無い",
           "type": "object",
@@ -68,7 +69,7 @@
           "additionalProperties": false
         }
       },
-      "required": ["requirements", "specification", "domain-model", "architecture", "planning", "implementation"],
+      "required": ["requirements", "specification", "domain-model", "architecture", "project", "planning", "implementation"],
       "additionalProperties": false
     }
   },

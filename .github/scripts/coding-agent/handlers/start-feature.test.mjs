@@ -91,7 +91,7 @@ describe('startFeature.run', () => {
     );
     assert.deepEqual(
       stageIssues.map((issue) => issue.assignees.map((user) => user.login)),
-      [['alice'], [], [], [], []],
+      FEATURE_STAGES.map((stage) => (stage.id === 'requirements' ? ['alice'] : [])),
     );
     // 担当のラベルは、Issue を作るときではなく、最後に付ける (付けたときに起動するため)
     assert.deepEqual(

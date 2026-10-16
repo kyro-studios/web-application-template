@@ -47,6 +47,7 @@ export const LABELS = [
   { name: 'stage:specification', color: 'c5def5', description: '段階: 仕様書' },
   { name: 'stage:domain-model', color: 'c5def5', description: '段階: 概念モデル' },
   { name: 'stage:architecture', color: 'c5def5', description: '段階: アーキテクチャ設計' },
+  { name: 'stage:project', color: 'c5def5', description: '段階: プロジェクトの作成' },
   { name: 'stage:planning', color: 'c5def5', description: '段階: 実装計画' },
   { name: 'stage:implementation', color: 'bfdadc', description: '段階: 実装タスク' },
   { name: 'needs-human', color: 'd93f0b', description: 'エージェントの修正が上限に達し、人の対応が必要' },

@@ -31,7 +31,7 @@ import Ajv2020 from 'ajv/dist/2020.js';
  */
 
 /**
- * @typedef {'specification' | 'domain-model' | 'architecture' | 'planning'} AuthoredStage
+ * @typedef {'specification' | 'domain-model' | 'architecture' | 'project' | 'planning'} AuthoredStage
  */
 
 /**
@@ -41,6 +41,7 @@ import Ajv2020 from 'ajv/dist/2020.js';
  * @property {{ author: Assignment, reviewer: Assignment }} specification
  * @property {{ author: Assignment, reviewer: Assignment }} domain-model
  * @property {{ author: Assignment, reviewer: Assignment }} architecture
+ * @property {{ author: Assignment, reviewer: Assignment }} project
  * @property {{ author: Assignment }} planning
  * @property {{ implementers: Assignment[], reviewer: Assignment }} implementation
  */
@@ -67,7 +68,7 @@ import Ajv2020 from 'ajv/dist/2020.js';
  */
 
 /**
- * @typedef {'requirements' | 'specification' | 'domain-model' | 'architecture' | 'implementation'} ReviewedStage
+ * @typedef {'requirements' | 'specification' | 'domain-model' | 'architecture' | 'project' | 'implementation'} ReviewedStage
  */
 
 /**
@@ -96,13 +97,13 @@ import Ajv2020 from 'ajv/dist/2020.js';
  * 作成担当 (roles.<段階>.author) を設定する段階
  * @type {readonly AuthoredStage[]}
  */
-export const AUTHORED_STAGES = ['specification', 'domain-model', 'architecture', 'planning'];
+export const AUTHORED_STAGES = ['specification', 'domain-model', 'architecture', 'project', 'planning'];
 
 /**
  * レビュー担当 (roles.<段階>.reviewer) を設定する段階
  * @type {readonly ReviewedStage[]}
  */
-export const REVIEWED_STAGES = ['requirements', 'specification', 'domain-model', 'architecture', 'implementation'];
+export const REVIEWED_STAGES = ['requirements', 'specification', 'domain-model', 'architecture', 'project', 'implementation'];
 
 /** 設定ファイルを置くディレクトリ (リポジトリのルートからの相対パス) */
 export const CONFIG_DIR = '.github/coding-agent';

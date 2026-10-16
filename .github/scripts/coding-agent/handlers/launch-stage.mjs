@@ -9,7 +9,7 @@
  *
  * 起動の条件は、次のすべてを満たすこと。
  * - 進行役の App が作った、Open の段階の Issue で、その段階の作成担当のラベルが付いている
- *   - 文書の段階と実装計画の作成担当は、agents.json の roles.<段階>.author で決まる
+ *   - 文書の段階、プロジェクトの作成、実装計画の作成担当は、agents.json の roles.<段階>.author で決まる
  *   - 実装タスクの作成担当は、roles.implementation.implementers のうち、Issue にラベルが付いているエージェント (実装計画で割り当てたもの)
  * - すべての依存先 (Sub Issue と Blocked by の Issue) が Close され、紐づく PR に Open のまま残っているものが無い
  */
@@ -21,7 +21,7 @@ import { findLabeledAncestor, findUnresolvedDependencies, findWaitingIssueNumber
 import { MAX_SUB_ISSUE_LEVELS } from '../plan-validation.mjs';
 import { FEATURE_NAME_FIELD, parseIssueForm } from '../issue-form.mjs';
 import { stageName } from '../prompt-format.mjs';
-import { artifactPath, FEATURE_LABEL, IMPLEMENTATION_STAGE, reviewDocuments, stageOf } from '../stages.mjs';
+import { artifactPath, FEATURE_LABEL, IMPLEMENTATION_STAGE, reviewDocuments, sharedArtifactPaths, stageOf } from '../stages.mjs';
 
 /**
  * @typedef {import('../route.mjs').Handler} Handler
@@ -32,7 +32,7 @@ import { artifactPath, FEATURE_LABEL, IMPLEMENTATION_STAGE, reviewDocuments, sta
  */
 
 /** 作成担当が成果物を作る段階 */
-export const CREATABLE_STAGES = /** @type {const} */ (['specification', 'domain-model', 'architecture', 'planning', 'implementation']);
+export const CREATABLE_STAGES = /** @type {const} */ (['specification', 'domain-model', 'architecture', 'project', 'planning', 'implementation']);
 
 /** 起動済みの印として、Issue のコメントに埋め込む文字列 */
 export const LAUNCH_MARKER = '<!-- coding-agent-launch -->';
@@ -197,6 +197,7 @@ export const launchStage = {
             feature: { number: feature.number, title: feature.title, body: feature.body ?? '' },
             featureDir,
             artifact: artifactPath(stage, featureDir),
+            sharedArtifacts: sharedArtifactPaths(stage),
             documents: reviewDocuments(stage, featureDir),
             ...(stage === 'planning'
               ? {

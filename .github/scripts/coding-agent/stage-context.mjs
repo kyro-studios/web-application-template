@@ -7,7 +7,7 @@ import { expandStageFiles, featureDirectory, isCoordinator, isValidFeatureName }
 import { findLabeledAncestor, hasLabel } from './github-issues.mjs';
 import { getClosingIssueNumbers } from './github-pulls.mjs';
 import { FEATURE_NAME_FIELD, parseIssueForm } from './issue-form.mjs';
-import { artifactPath, FEATURE_LABEL, reviewDocuments, stageOf } from './stages.mjs';
+import { artifactPath, FEATURE_LABEL, reviewDocuments, sharedArtifactPaths, stageOf } from './stages.mjs';
 
 /**
  * @typedef {import('./github-issues.mjs').GitHub} GitHub
@@ -23,6 +23,7 @@ import { artifactPath, FEATURE_LABEL, reviewDocuments, stageOf } from './stages.
  * @property {RestIssue & { body?: string | null }} feature 機能の親 Issue
  * @property {string} featureDir 機能ごとのディレクトリ
  * @property {string | null} artifact 成果物のパス
+ * @property {string[]} sharedArtifacts あわせて書き足す、機能をまたいで使う文書のパス
  * @property {{ name: string, path: string }[]} documents 参考資料
  * @property {{ allow: string[], deny: string[] }} allowedFiles 変更してよいファイルと、変更してはいけないファイル
  */
@@ -96,6 +97,7 @@ export async function resolveStageContext({ github, repository, config, pullRequ
       feature,
       featureDir,
       artifact: artifactPath(stage, featureDir),
+      sharedArtifacts: sharedArtifactPaths(stage),
       documents: reviewDocuments(stage, featureDir),
       allowedFiles: expandStageFiles(config.stages, reviewedStage, featureDir),
     },

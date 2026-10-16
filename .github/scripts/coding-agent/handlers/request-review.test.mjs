@@ -158,7 +158,7 @@ describe('requestReview.run', () => {
     const planning = addStage('planning');
     const parentTask = addStage('implementation', planning.number);
     const task = addStage('implementation', parentTask.number);
-    fake.addPull(PR_NUMBER, { closing: [task.number], files: [{ filename: 'src/App.java' }, { filename: 'docs/features/1-user-login/architecture.md' }] });
+    fake.addPull(PR_NUMBER, { closing: [task.number], files: [{ filename: 'app/backend/App.java' }, { filename: 'docs/features/1-user-login/architecture.md' }] });
 
     const { requests } = await run(fake, createContext('opened', pullRequestPayload({ author: 'claude-app[bot]', authorType: 'Bot' })));
 
@@ -167,7 +167,13 @@ describe('requestReview.run', () => {
     assert.equal(materials.artifact, null);
     assert.deepEqual(
       materials.documents.map((/** @type {{ path: string }} */ document) => document.path),
-      ['docs/features/1-user-login/specification.md', 'docs/features/1-user-login/domain-model.md', 'docs/features/1-user-login/architecture.md'],
+      [
+        'docs/features/1-user-login/specification.md',
+        'docs/features/1-user-login/domain-model.md',
+        'docs/features/1-user-login/architecture.md',
+        'docs/architecture.md',
+        'docs/api/openapi.yaml',
+      ],
     );
     assert.deepEqual(materials.violations, ['docs/features/1-user-login/architecture.md']);
   });

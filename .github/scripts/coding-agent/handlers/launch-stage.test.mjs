@@ -180,10 +180,16 @@ describe('launchStage.run', () => {
     assert.equal(request?.stage, 'implementation');
     assert.deepEqual(request?.materials.issue, { number: task.number, title: 'バックエンドの土台を作る', body: 'Gradle で作る' });
     assert.equal(request?.materials.artifact, null);
-    assert.deepEqual(request?.materials.allowedFiles, { allow: ['**'], deny: ['.github/**', 'docs/features/**'] });
+    assert.deepEqual(request?.materials.allowedFiles, { allow: ['app/**'], deny: [] });
     assert.deepEqual(
       request?.materials.documents.map((/** @type {{ path: string }} */ document) => document.path),
-      ['docs/features/1-user-login/specification.md', 'docs/features/1-user-login/domain-model.md', 'docs/features/1-user-login/architecture.md'],
+      [
+        'docs/features/1-user-login/specification.md',
+        'docs/features/1-user-login/domain-model.md',
+        'docs/features/1-user-login/architecture.md',
+        'docs/architecture.md',
+        'docs/api/openapi.yaml',
+      ],
     );
     assert.equal(request?.materials.implementers, undefined);
     assert.ok(fake.comments[0].body.includes('「実装タスク」'));
@@ -242,8 +248,52 @@ describe('launchStage.run', () => {
     assert.deepEqual(request?.materials.planLimits, { maxTasks: 30, maxDepth: 6 });
     assert.deepEqual(
       request?.materials.documents.map((/** @type {{ path: string }} */ document) => document.path),
-      ['docs/features/1-user-login/specification.md', 'docs/features/1-user-login/domain-model.md', 'docs/features/1-user-login/architecture.md'],
+      [
+        'docs/features/1-user-login/specification.md',
+        'docs/features/1-user-login/domain-model.md',
+        'docs/features/1-user-login/architecture.md',
+        'docs/architecture.md',
+        'docs/api/openapi.yaml',
+      ],
     );
+  });
+
+  it('アーキテクチャ設計では、あわせて書き足す、機能をまたいで使う文書を依頼に含める', async () => {
+    const { fake, domainModel, architecture } = setup();
+    close(fake, domainModel.number);
+
+    const { result } = await run(fake, dispatchContext(architecture.number), launchStage);
+
+    const request = result.requests?.[0];
+    assert.equal(request?.stage, 'architecture');
+    assert.equal(request?.materials.artifact, 'docs/features/1-user-login/architecture.md');
+    assert.deepEqual(request?.materials.sharedArtifacts, ['docs/architecture.md', 'docs/api/openapi.yaml']);
+  });
+
+  it('プロジェクトの作成を、作成担当に、全体の構成と API の契約を参考資料にして依頼する', async () => {
+    const { fake, feature, architecture } = setup();
+    const project = fake.addIssue({
+      title: 'project: ログイン機能',
+      body: 'project の段階',
+      labels: ['stage:project', 'agent:claude'],
+      parent: feature.number,
+    });
+    project.blockedBy.push(architecture.number);
+    close(fake, architecture.number);
+
+    const { result } = await run(fake, dispatchContext(project.number), launchStage);
+
+    const request = result.requests?.[0];
+    assert.equal(request?.stage, 'project');
+    assert.equal(request?.agent, 'claude');
+    assert.equal(request?.materials.artifact, null);
+    assert.deepEqual(request?.materials.sharedArtifacts, []);
+    assert.deepEqual(request?.materials.allowedFiles, { allow: ['app/**', 'scripts/test.sh'], deny: ['app/generated/**'] });
+    assert.deepEqual(
+      request?.materials.documents.map((/** @type {{ path: string }} */ document) => document.path),
+      ['docs/features/1-user-login/architecture.md', 'docs/architecture.md', 'docs/api/openapi.yaml'],
+    );
+    assert.ok(fake.comments[0].body.includes('「プロジェクトの作成」'));
   });
 
   it('作成担当のラベルが無い Issue や、進行役の App が作っていない Issue は起動しない', async () => {

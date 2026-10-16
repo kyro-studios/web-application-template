@@ -14,7 +14,8 @@ describe('段階の定義', () => {
     assert.deepEqual([...AUTHORED_STAGES].sort(), [...authored].sort());
     assert.deepEqual(Object.keys(config.agents.roles).sort(), [...FEATURE_STAGES.map((stage) => stage.id), IMPLEMENTATION_STAGE].sort());
 
-    const reviewed = FEATURE_STAGES.filter((stage) => stage.artifact !== null).map((stage) => stage.id);
+    // PR を作る段階 (実装計画のほか) は、変更してよいファイルを決める
+    const reviewed = FEATURE_STAGES.filter((stage) => stage.id !== 'planning').map((stage) => stage.id);
     assert.deepEqual(Object.keys(config.stages.stages).sort(), [...reviewed, IMPLEMENTATION_STAGE].sort());
 
     const labels = LABELS.map((label) => label.name);
@@ -61,9 +62,15 @@ describe('stageIssueBody', () => {
   it('作業内容、成果物、参考資料を書く', () => {
     const body = stageIssueBody({ stage: getFeatureStage('architecture'), featureIssueNumber: 12, featureDir: 'docs/features/12-login' });
     assert.match(body, /^#12 の「アーキテクチャ設計」の段階です。/);
-    assert.match(body, /## 成果物\n\n`docs\/features\/12-login\/architecture\.md`/);
+    assert.match(body, /## 成果物\n\n- `docs\/features\/12-login\/architecture\.md`\n- 全体の構成: `docs\/architecture\.md`\n- API の契約: `docs\/api\/openapi\.yaml`/);
     assert.match(body, /- 概念モデル: `docs\/features\/12-login\/domain-model\.md`/);
     assert.doesNotMatch(body, /## 進め方/);
+  });
+
+  it('プロジェクトの作成には、成果物の文書を書かず、全体の構成と API の契約を参考資料に書く', () => {
+    const body = stageIssueBody({ stage: getFeatureStage('project'), featureIssueNumber: 12, featureDir: 'docs/features/12-login' });
+    assert.doesNotMatch(body, /## 成果物/);
+    assert.match(body, /## 参考資料\n\n- アーキテクチャ設計: `docs\/features\/12-login\/architecture\.md`\n- 全体の構成: `docs\/architecture\.md`\n- API の契約: `docs\/api\/openapi\.yaml`/);
   });
 
   it('要件定義には、人が PR を作る進め方を書く', () => {

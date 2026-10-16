@@ -36,6 +36,10 @@
       "author": { "agent": "claude", "model": "claude-sonnet-5-5", "effort": "medium" },
       "reviewer": { "agent": "codex", "model": "gpt-6.1-sol", "effort": "medium" }
     },
+    "project": {
+      "author": { "agent": "claude", "model": "claude-sonnet-5-5", "effort": "medium" },
+      "reviewer": { "agent": "codex", "model": "gpt-6.1-sol", "effort": "medium" }
+    },
     "planning": {
       "author": { "agent": "claude", "model": "claude-sonnet-5-5", "effort": "medium" }
     },
