@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { toDispatch, validateRequest, writeRequest } from './agent-request.mjs';
+import { REVIEWED_STAGES } from './config.mjs';
+import { CREATABLE_STAGES } from './handlers/launch-stage.mjs';
 
 const SHA = '0123456789abcdef0123456789abcdef01234567';
 
@@ -31,6 +33,15 @@ describe('validateRequest', () => {
     assert.deepEqual(validateRequest(createRequest()), []);
     assert.deepEqual(validateRequest(createRequest({ mode: 'fix', pullRequestNumber: 34 })), []);
     assert.deepEqual(validateRequest(createRequest({ mode: 'review', stage: 'requirements', pullRequestNumber: 34 })), []);
+  });
+
+  it('起動できる段階とレビューする段階の依頼を、すべて受け付ける', () => {
+    for (const stage of CREATABLE_STAGES) {
+      assert.deepEqual(validateRequest(createRequest({ stage })), [], stage);
+    }
+    for (const stage of REVIEWED_STAGES) {
+      assert.deepEqual(validateRequest(createRequest({ mode: 'review', stage, pullRequestNumber: 34 })), [], stage);
+    }
   });
 
   it('モデルと effort は、null (ツールの既定) か、決まった形式の文字列にする', () => {

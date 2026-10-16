@@ -207,6 +207,7 @@ describe('機能ごとのディレクトリ', () => {
       specification: { allow: ['{featureDir}/specification.md'] },
       'domain-model': { allow: ['{featureDir}/domain-model.md'] },
       architecture: { allow: ['{featureDir}/architecture.md'] },
+      project: { allow: ['app/**'] },
       implementation: { allow: ['**'], deny: ['.github/**', '{featureRoot}/**'] },
     },
   };

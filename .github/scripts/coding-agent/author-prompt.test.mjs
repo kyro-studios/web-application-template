@@ -60,6 +60,32 @@ describe('buildCreatePrompt', () => {
     assert.match(prompt, /- タスクの数の上限: 30 件/);
     assert.match(prompt, /- 親子関係の深さの上限: 6 階層/);
   });
+
+  it('段階に渡す知識を、指示の後に、見出しを下げて加える', () => {
+    const prompt = buildCreatePrompt({
+      prompts: ['共通の指示', '設計の指示'],
+      knowledge: [{ name: '既定の技術スタック', body: '# 技術スタック\n\n## バックエンド\n\n- Javalin\n' }],
+      request: {
+        ...baseRequest,
+        mode: 'create',
+        stage: 'architecture',
+        pullRequestNumber: null,
+        materials: { ...materials, artifact: 'docs/features/1-login/architecture.md', sharedArtifacts: ['docs/architecture.md', 'docs/api/openapi.yaml'] },
+      },
+    });
+
+    assert.match(prompt, /設計の指示\n\n## この段階の知識\n\n### 既定の技術スタック\n\n#### 技術スタック\n\n##### バックエンド\n\n- Javalin\n\n## 依頼の内容/);
+    assert.match(prompt, /- あわせて書き足す文書 \(機能をまたいで使う。無ければ作る\): `docs\/architecture\.md`、`docs\/api\/openapi\.yaml`/);
+  });
+
+  it('知識の無い段階には、知識の節を加えない', () => {
+    const prompt = buildCreatePrompt({
+      prompts: ['共通の指示'],
+      request: { ...baseRequest, mode: 'create', pullRequestNumber: null, materials },
+    });
+    assert.doesNotMatch(prompt, /この段階の知識/);
+    assert.doesNotMatch(prompt, /あわせて書き足す文書/);
+  });
 });
 
 describe('buildFixPrompt', () => {
@@ -87,6 +113,31 @@ describe('buildFixPrompt', () => {
     assert.match(prompt, /- 修正する成果物: `docs\/features\/1-login\/specification\.md`/);
     assert.match(prompt, /### レビューの所見\n\n~~~text\n所見\n~~~/);
     assert.match(prompt, /- `docs\/features\/1-login\/specification\.md` の 12 行目:\n\n~~~text\n要件が漏れている\n~~~/);
+  });
+
+  it('修正でも、作成と同じ知識を、段階ごとの指示の後に加える', () => {
+    const prompt = buildFixPrompt({
+      prompts: ['修正の指示\n', 'プロジェクトの作成の指示\n'],
+      knowledge: [{ name: 'プロジェクトの約束', body: '## 置き場所\n\n- app/ に置く\n' }],
+      request: {
+        ...baseRequest,
+        id: 'fix-pr-8-0123456',
+        mode: 'fix',
+        stage: 'project',
+        pullRequestNumber: 8,
+        materials: {
+          ...materials,
+          artifact: null,
+          pullRequest: { number: 8, title: 'build: 土台を作る', body: 'Closes #3', headRef: 'coding-agent/claude/issue-3-1' },
+          review: { id: 1, body: '所見', comments: [] },
+          conflict: null,
+          fixRound: 1,
+          maxFixRounds: 3,
+        },
+      },
+    });
+
+    assert.match(prompt, /プロジェクトの作成の指示\n\n## この段階の知識\n\n### プロジェクトの約束\n\n##### 置き場所\n\n- app\/ に置く\n\n## 依頼の内容/);
   });
 });
 
@@ -122,9 +173,11 @@ describe('promptFiles', () => {
     assert.deepEqual(promptFiles('create', 'specification'), ['create/common.md', 'create/documents.md', 'create/specification.md']);
     assert.deepEqual(promptFiles('create', 'planning'), ['create/common.md', 'create/planning.md']);
     assert.deepEqual(promptFiles('create', 'implementation'), ['create/common.md', 'create/implementation.md', 'create/implementation-output.md']);
+    assert.deepEqual(promptFiles('create', 'project'), ['create/common.md', 'create/code.md', 'create/project.md', 'create/project-output.md']);
     assert.deepEqual(promptFiles('fix', 'architecture'), ['fix/common.md', 'create/architecture.md']);
     // 修正では、作成のときの出力の指示を含めない
     assert.deepEqual(promptFiles('fix', 'implementation'), ['fix/common.md', 'create/implementation.md']);
+    assert.deepEqual(promptFiles('fix', 'project'), ['fix/common.md', 'create/project.md']);
     // コンフリクトの修正では、解消の指示を加える
     assert.deepEqual(promptFiles('fix', 'implementation', { conflict: true }), ['fix/common.md', 'create/implementation.md', 'fix/conflict.md']);
   });

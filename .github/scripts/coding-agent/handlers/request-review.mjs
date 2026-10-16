@@ -73,7 +73,7 @@ export const requestReview = {
       core.info(`#${pullRequest.number} はレビューしません: ${resolved.reason}`);
       return {};
     }
-    const { issue, stage, feature, featureDir, artifact, documents, allowedFiles } = resolved.context;
+    const { issue, stage, feature, featureDir, artifact, sharedArtifacts, documents, allowedFiles } = resolved.context;
 
     // レビュー担当は段階ごとに決まる。PR の作成者は自分の PR を Approve できないため、レビュー担当が作った PR はレビューしない
     const { agent: reviewer, execution } = getReviewer(config.agents, stage);
@@ -109,6 +109,7 @@ export const requestReview = {
         feature: { number: feature.number, title: feature.title, body: feature.body ?? '' },
         featureDir,
         artifact,
+        sharedArtifacts,
         documents,
         allowedFiles,
         violations,

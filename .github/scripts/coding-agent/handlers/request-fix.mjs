@@ -135,7 +135,7 @@ export const requestFix = {
       core.info(`#${number} の修正は依頼しません: ${resolved.reason}`);
       return {};
     }
-    const { issue, stage, feature, featureDir, artifact, documents, allowedFiles } = resolved.context;
+    const { issue, stage, feature, featureDir, artifact, sharedArtifacts, documents, allowedFiles } = resolved.context;
     const { agent: reviewer } = getReviewer(config.agents, stage);
     if (author.id === reviewer.id) {
       core.info(`#${number} は「${stage}」のレビュー担当が作った PR のため、修正を依頼しません`);
@@ -224,6 +224,7 @@ export const requestFix = {
             feature: { number: feature.number, title: feature.title, body: feature.body ?? '' },
             featureDir,
             artifact,
+            sharedArtifacts,
             documents,
             allowedFiles,
             review: reviewToFix === undefined ? null : { id: reviewToFix.id, body: reviewToFix.body, comments: reviewToFix.comments },

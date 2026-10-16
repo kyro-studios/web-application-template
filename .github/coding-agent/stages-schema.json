@@ -19,9 +19,10 @@
         "specification": { "$ref": "#/$defs/stage" },
         "domain-model": { "$ref": "#/$defs/stage" },
         "architecture": { "$ref": "#/$defs/stage" },
+        "project": { "$ref": "#/$defs/stage" },
         "implementation": { "$ref": "#/$defs/stage" }
       },
-      "required": ["requirements", "specification", "domain-model", "architecture", "implementation"],
+      "required": ["requirements", "specification", "domain-model", "architecture", "project", "implementation"],
       "additionalProperties": false
     }
   },

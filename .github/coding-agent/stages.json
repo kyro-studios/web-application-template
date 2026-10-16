@@ -12,11 +12,14 @@
       "allow": ["{featureDir}/domain-model.md"]
     },
     "architecture": {
-      "allow": ["{featureDir}/architecture.md"]
+      "allow": ["{featureDir}/architecture.md", "docs/architecture.md", "docs/api/openapi.yaml"]
+    },
+    "project": {
+      "allow": ["app/**", "architecture-rules/**", "acceptance/**", "scripts/test.sh", "scripts/test.Dockerfile"],
+      "deny": ["acceptance/tests/**"]
     },
     "implementation": {
-      "allow": ["**"],
-      "deny": [".github/**", "{featureRoot}/**", "AGENTS.md", "CLAUDE.md", ".claude/**"]
+      "allow": ["app/**"]
     }
   }
 }

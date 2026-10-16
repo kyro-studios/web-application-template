@@ -13,7 +13,8 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { fence, stageName } from './prompt-format.mjs';
+import { readKnowledge } from './knowledge.mjs';
+import { fence, knowledgeLines, stageName } from './prompt-format.mjs';
 import { IMPLEMENTATION_STAGE } from './stages.mjs';
 
 /**
@@ -23,6 +24,7 @@ import { IMPLEMENTATION_STAGE } from './stages.mjs';
  * @property {{ number: number, title: string, body: string }} feature
  * @property {string} featureDir
  * @property {string | null} artifact
+ * @property {string[]} [sharedArtifacts] あわせて書き足す、機能をまたいで使う文書 (アーキテクチャ設計のみ)
  * @property {{ name: string, path: string }[]} documents
  * @property {{ allow: string[], deny: string[] } | null} allowedFiles 変更してよいファイル (ファイルを変更しない実装計画では null)
  * @property {{ id: string, name: string }[]} [implementers] 実装タスクの担当に選べるエージェント (実装計画のみ)
@@ -41,9 +43,16 @@ import { IMPLEMENTATION_STAGE } from './stages.mjs';
  */
 
 /**
+ * 実装タスクのほかに、コードを変える段階 (仕様の 6.1)。実装タスクは、指示の組み立てが別のため含めない
+ */
+const CODE_STAGES = ['project'];
+
+/**
  * 依頼の種類と段階に応じて、読み込む指示のファイル (prompts/ からの相対パス) を返す。
  * - 作成: 共通の指示に、段階の種類ごとの指示を続ける。文書の段階は、文書に共通する指示と段階ごとの指示を続ける。
+ *   プロジェクトの作成は、コードを変える段階に共通する指示と段階ごとの指示と、作成のときの出力の指示を続ける。
  *   実装タスクは、実装の指示と、作成のときの出力の指示を続ける
+ * - どちらも、最後に段階に渡す知識 (knowledge.mjs) を加える。知識はここでは返さず、readKnowledge で読む
  * - 修正: 修正に共通する指示に、段階ごとの作成の指示を参考として続ける。出力の指示は修正に共通する指示にあるため、
  *   作成のときの出力の指示は含めない。コンフリクトの修正では、コンフリクトの解消の指示を加える
  *
@@ -61,6 +70,9 @@ export function promptFiles(mode, stage, { conflict = false } = {}) {
   }
   if (stage === IMPLEMENTATION_STAGE) {
     return ['create/common.md', 'create/implementation.md', 'create/implementation-output.md'];
+  }
+  if (CODE_STAGES.includes(stage)) {
+    return ['create/common.md', 'create/code.md', `create/${stage}.md`, `create/${stage}-output.md`];
   }
   return ['create/common.md', 'create/documents.md', `create/${stage}.md`];
 }
@@ -82,10 +94,13 @@ function formatPatterns(patterns) {
  * @returns {string[]}
  */
 function requestLines(request) {
-  const { issue, feature, artifact, documents, allowedFiles, implementers, planLimits } = request.materials;
+  const { issue, feature, artifact, sharedArtifacts = [], documents, allowedFiles, implementers, planLimits } = request.materials;
   const lines = [`- 段階: ${stageName(request.stage)}`, `- Issue: #${issue.number} ${issue.title}`, `- 機能の親 Issue: #${feature.number} ${feature.title}`];
   if (artifact !== null) {
     lines.push(`- ${request.mode === 'fix' ? '修正する' : '作成する'}成果物: \`${artifact}\``);
+  }
+  if (sharedArtifacts.length > 0) {
+    lines.push(`- あわせて書き足す文書 (機能をまたいで使う。無ければ作る): ${formatPatterns(sharedArtifacts)}`);
   }
   if (documents.length > 0) {
     lines.push('- 参考資料 (前の段階の成果物):');
@@ -125,10 +140,18 @@ function issueBodyLines({ issue, feature }) {
  * @param {object} args
  * @param {import('./agent-request.mjs').AgentRequest & { materials: CreateMaterials }} args.request
  * @param {string[]} args.prompts 指示のファイルの本文 (promptFiles の順)
+ * @param {{ name: string, body: string }[]} [args.knowledge] 段階に渡す知識 (readKnowledge で読んだもの)
  * @returns {string}
  */
-export function buildCreatePrompt({ request, prompts }) {
-  const lines = [...prompts.flatMap((prompt) => [prompt.trim(), '']), '## 依頼の内容', '', ...requestLines(request), ...issueBodyLines(request.materials)];
+export function buildCreatePrompt({ request, prompts, knowledge = [] }) {
+  const lines = [
+    ...prompts.flatMap((prompt) => [prompt.trim(), '']),
+    ...knowledgeLines(knowledge),
+    '## 依頼の内容',
+    '',
+    ...requestLines(request),
+    ...issueBodyLines(request.materials),
+  ];
   return `${lines.join('\n')}\n`;
 }
 
@@ -138,9 +161,10 @@ export function buildCreatePrompt({ request, prompts }) {
  * @param {object} args
  * @param {import('./agent-request.mjs').AgentRequest & { materials: FixMaterials }} args.request
  * @param {string[]} args.prompts 指示のファイルの本文 (promptFiles の順。修正に共通する指示と、段階ごとの作成の指示)
+ * @param {{ name: string, body: string }[]} [args.knowledge] 段階に渡す知識 (readKnowledge で読んだもの)
  * @returns {string}
  */
-export function buildFixPrompt({ request, prompts }) {
+export function buildFixPrompt({ request, prompts, knowledge = [] }) {
   const [common, stagePrompt, conflictPrompt] = prompts;
   const { pullRequest, review, conflict, fixRound, maxFixRounds } = request.materials;
   const reasons = [...(review ? ['レビューの指摘'] : []), ...(conflict ? ['既定ブランチとのコンフリクト'] : [])];
@@ -153,6 +177,7 @@ export function buildFixPrompt({ request, prompts }) {
     '',
     stagePrompt.trim(),
     '',
+    ...knowledgeLines(knowledge),
     '## 依頼の内容',
     '',
     `- PR: #${pullRequest.number} ${pullRequest.title}`,
@@ -210,8 +235,9 @@ async function main(args) {
   const promptsDir = /** @type {string} */ (values.prompts);
   const files = promptFiles(request.mode, request.stage, { conflict: Boolean(conflict) });
   const prompts = await Promise.all(files.map((file) => readFile(join(promptsDir, file), 'utf8')));
+  const knowledge = await readKnowledge(request.stage);
   const build = request.mode === 'fix' ? buildFixPrompt : buildCreatePrompt;
-  await writeFile(/** @type {string} */ (values['prompt-out']), build({ request, prompts }));
+  await writeFile(/** @type {string} */ (values['prompt-out']), build({ request, prompts, knowledge }));
   console.log(request.mode === 'fix' ? '修正の指示を作成しました' : '作成の指示を作成しました');
 }
 

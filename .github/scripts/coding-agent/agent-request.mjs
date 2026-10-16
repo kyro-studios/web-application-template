@@ -8,13 +8,14 @@
 
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { FEATURE_STAGES, IMPLEMENTATION_STAGE } from './stages.mjs';
 
 /**
  * @typedef {'create' | 'fix' | 'review'} RequestMode
  */
 
 /**
- * @typedef {'requirements' | 'specification' | 'domain-model' | 'architecture' | 'planning' | 'implementation'} AgentStage
+ * @typedef {import('./stages.mjs').FeatureStage | 'implementation'} AgentStage
  */
 
 /**
@@ -49,8 +50,9 @@ export const REQUEST_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 /** @type {ReadonlySet<string>} */
 const MODES = new Set(['create', 'fix', 'review']);
 
+// 段階を加えたときに漏れないよう、段階の定義から作る
 /** @type {ReadonlySet<string>} */
-const STAGES = new Set(['requirements', 'specification', 'domain-model', 'architecture', 'planning', 'implementation']);
+const STAGES = new Set([...FEATURE_STAGES.map((stage) => stage.id), IMPLEMENTATION_STAGE]);
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 

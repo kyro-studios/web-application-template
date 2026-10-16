@@ -96,7 +96,7 @@ Claude は、API キーの代わりに、Claude の Pro や Max などのサブ�
 - 段階ごとに、作成担当とレビュー担当は**別のエージェント**にする (PR を作った App は、自分の PR を Approve できないため)
 - `model` と `effort` を省略するか `null` にすると、エージェントのツールの既定を使う。指定できる値は、エージェントのツールとモデルによる
 - エージェントごとの `fix` は、そのエージェントが作った PR を修正するときのモデルと effort
-- Codex による実装タスクには、まだ対応していない。`roles.implementation.implementers` には Claude を指定する
+- Codex によるコードを変える段階 (プロジェクトの作成と実装タスク) には、まだ対応していない。`roles.project.author` と `roles.implementation.implementers` には Claude を指定する
 
 書き終えたら、設定の形式と関係を確かめます。
 
@@ -149,7 +149,7 @@ node .github/scripts/coding-agent/setup-repository.mjs --repo <owner>/<name>
 ## 7. 動作を確かめる
 
 1. Issue の「New issue」で「新規機能」のフォームを選び、機能の親 Issue を作る。機能名は、英小文字・数字とハイフンにする
-2. 数十秒で、要件定義・仕様書・概念モデル・アーキテクチャ設計・実装計画の段階の Issue が、Sub Issue として作られることを確かめる。要件定義の Issue にはあなたが Assign され、ほかの段階の Issue には担当のエージェントのラベル (`agent:claude` など) が付く
+2. 数十秒で、要件定義・仕様書・概念モデル・アーキテクチャ設計・プロジェクトの作成・実装計画の段階の Issue が、Sub Issue として作られることを確かめる。要件定義の Issue にはあなたが Assign され、ほかの段階の Issue には担当のエージェントのラベル (`agent:claude` など) が付く
 3. 要件定義の Issue に従って、要件定義書 (`docs/features/<番号>-<機能名>/requirements.md`) を書き、その Issue を Close する PR (本文に `Closes #<番号>`) を作る。Ready for review にすると、レビュー担当のレビューが始まる
 
 最初は、範囲の小さい機能で試すことをおすすめします。要件定義書の PR を Ready for review にした後は、実装まで自動で進み、API の料金がかかります。

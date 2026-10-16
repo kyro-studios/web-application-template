@@ -124,6 +124,19 @@ jobs:
           result="$RESULT_DIR/result.json"
 
           if [ ! -s "$patch" ]; then
+            # プロジェクトの作成では、今の土台のままでよければ、変更が要らない理由を出力する。
+            # 理由をコメントして Issue を Close し、次の段階に進める (仕様の 10.1)
+            unchanged_reason="$(jq -r '.unchanged_reason // empty' "$result" 2>/dev/null || true)"
+            if [ -n "$unchanged_reason" ]; then
+              body_file="$RUNNER_TEMP/unchanged-reason.md"
+              {
+                printf '🤖 %s は、変更が要らないと判断しました。理由は次のとおりです ([ワークフロー](%s))。\n\n' "$AGENT_NAME" "$RUN_URL"
+                printf '%s\n' "$unchanged_reason"
+              } > "$body_file"
+              gh issue comment "$ISSUE_NUMBER" --body-file "$body_file"
+              gh issue close "$ISSUE_NUMBER" --reason completed
+              exit 0
+            fi
             gh issue comment "$ISSUE_NUMBER" --body "🤖 ${AGENT_NAME} は変更を作成しませんでした。詳細は [ワークフロー]($RUN_URL) のログを確認してください。"
             echo "::error::エージェントが変更を作成しませんでした"
             exit 1

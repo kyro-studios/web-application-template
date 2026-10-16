@@ -42,6 +42,7 @@ export function fixtureAgentsConfig() {
       specification: { author: { agent: 'claude', model: 'claude-model', effort: 'high' }, reviewer: { agent: 'codex', model: 'codex-model', effort: 'medium' } },
       'domain-model': { author: { agent: 'claude' }, reviewer: { agent: 'codex' } },
       architecture: { author: { agent: 'claude' }, reviewer: { agent: 'codex' } },
+      project: { author: { agent: 'claude' }, reviewer: { agent: 'codex' } },
       planning: { author: { agent: 'claude' } },
       implementation: { implementers: [{ agent: 'claude' }], reviewer: { agent: 'codex' } },
     },
@@ -60,8 +61,9 @@ export function fixtureStagesConfig() {
       requirements: { allow: ['{featureDir}/requirements.md'] },
       specification: { allow: ['{featureDir}/specification.md'] },
       'domain-model': { allow: ['{featureDir}/domain-model.md'] },
-      architecture: { allow: ['{featureDir}/architecture.md'] },
-      implementation: { allow: ['**'], deny: ['.github/**', '{featureRoot}/**'] },
+      architecture: { allow: ['{featureDir}/architecture.md', 'docs/architecture.md', 'docs/api/openapi.yaml'] },
+      project: { allow: ['app/**', 'scripts/test.sh'], deny: ['app/generated/**'] },
+      implementation: { allow: ['app/**'] },
     },
   };
 }
