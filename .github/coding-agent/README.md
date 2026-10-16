@@ -96,7 +96,7 @@ Claude は、API キーの代わりに、Claude の Pro や Max などのサブ�
 - 段階ごとに、作成担当とレビュー担当は**別のエージェント**にする (PR を作った App は、自分の PR を Approve できないため)
 - `model` と `effort` を省略するか `null` にすると、エージェントのツールの既定を使う。指定できる値は、エージェントのツールとモデルによる
 - エージェントごとの `fix` は、そのエージェントが作った PR を修正するときのモデルと effort
-- Codex による実装タスクには、まだ対応していない。`roles.implementation.implementers` には Claude を指定する
+- Codex によるコードを変える段階 (プロジェクトの作成と実装タスク) には、まだ対応していない。`roles.project.author` と `roles.implementation.implementers` には Claude を指定する
 
 書き終えたら、設定の形式と関係を確かめます。
 
