@@ -27,6 +27,7 @@
 
 - Vitest
 - Playwright
+- dependency-cruiser
 
 ### Linting
 
@@ -48,7 +49,7 @@
 
 ### DB
 
-- PostgreSQL (Neon)
+- PostgreSQL
 
 ### ORM
 
@@ -74,9 +75,6 @@
 
 ## 使い方
 
-- アプリケーションのコードは、すべて `app/` の下に置く。`app/` の中の分け方 (フロントエンドとバックエンドの 2 つに分けるか、モジュラーモノリスにするかなど) は、アーキテクチャ設計で決める。小さいうちは 2 つに分け、機能が増えたらモジュールに分けるのを目安にする
-- モジュール間の依存の向きは、ArchUnit のテストで確かめる
-- React Router の使い方 (SPA として使うか、フレームワークのモードで使うか) は、アーキテクチャ設計で決める
-- 単体テストは、フロントエンドは Vitest、バックエンドは JUnit で書く。Playwright は受け入れテスト (`acceptance/`) に使う
-- テストで使う PostgreSQL は、Testcontainers で起動する。Neon には接続しない
+- アプリケーションのコードは、すべて `app/` の下に置く。`app/` の中の分け方はアーキテクチャ設計で決める。
+- テストで使う PostgreSQL は、Testcontainers で起動する。
 - ツールのメジャーバージョン (Node.js の LTS、JDK 21) は、`scripts/test.Dockerfile` で固定する
