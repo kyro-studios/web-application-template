@@ -14,7 +14,8 @@ import { appendFile, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { fence, stageName } from './prompt-format.mjs';
+import { readKnowledge } from './knowledge.mjs';
+import { fence, knowledgeLines, stageName } from './prompt-format.mjs';
 
 /**
  * レビューの依頼の資料 (handlers/request-review.mjs が作る)
@@ -24,6 +25,7 @@ import { fence, stageName } from './prompt-format.mjs';
  * @property {{ number: number, title: string, body: string }} feature
  * @property {string} featureDir
  * @property {string | null} artifact
+ * @property {string[]} [sharedArtifacts]
  * @property {{ name: string, path: string }[]} documents
  * @property {{ allow: string[], deny: string[] }} allowedFiles
  * @property {string[]} violations
@@ -44,15 +46,17 @@ import { fence, stageName } from './prompt-format.mjs';
  * @param {import('./agent-request.mjs').AgentRequest & { materials: ReviewMaterials }} args.request
  * @param {string} args.common すべての段階に共通する指示
  * @param {string} args.stagePrompt 段階ごとの観点
+ * @param {{ name: string, body: string }[]} [args.knowledge] 段階に渡す知識 (作成担当と同じもの)
  * @returns {string}
  */
-export function buildReviewPrompt({ request, common, stagePrompt }) {
-  const { pullRequest, issue, feature, artifact, documents, previousReviews } = request.materials;
+export function buildReviewPrompt({ request, common, stagePrompt, knowledge = [] }) {
+  const { pullRequest, issue, feature, artifact, sharedArtifacts = [], documents, previousReviews } = request.materials;
   const lines = [
     common.trim(),
     '',
     stagePrompt.trim(),
     '',
+    ...knowledgeLines(knowledge),
     '## 依頼の内容',
     '',
     `- 段階: ${stageName(request.stage)}`,
@@ -63,6 +67,9 @@ export function buildReviewPrompt({ request, common, stagePrompt }) {
   ];
   if (artifact !== null) {
     lines.push(`- 成果物: \`${artifact}\``);
+  }
+  for (const path of sharedArtifacts) {
+    lines.push(`- あわせて書き足す文書: \`${path}\``);
   }
   if (documents.length > 0) {
     lines.push('- 参考資料 (前の段階の成果物):');
@@ -148,7 +155,8 @@ async function main(args) {
       readFile(join(promptsDir, 'common.md'), 'utf8'),
       readFile(join(promptsDir, `${request.stage}.md`), 'utf8'),
     ]);
-    await writeFile(/** @type {string} */ (values['prompt-out']), buildReviewPrompt({ request, common, stagePrompt }));
+    const knowledge = await readKnowledge(request.stage);
+    await writeFile(/** @type {string} */ (values['prompt-out']), buildReviewPrompt({ request, common, stagePrompt, knowledge }));
   }
 
   if (process.env.GITHUB_OUTPUT) {

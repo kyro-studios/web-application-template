@@ -48,6 +48,19 @@ describe('buildReviewPrompt', () => {
     assert.match(prompt, /  - 要件定義: `docs\/features\/1-login\/requirements\.md`/);
     assert.match(prompt, /### PR の本文\n\n~~~text\nCloses #3\n~~~/);
     assert.doesNotMatch(prompt, /これまでのレビュー/);
+    assert.doesNotMatch(prompt, /この段階の知識/);
+  });
+
+  it('作成担当と同じ知識を、段階ごとの観点の後に加える', () => {
+    const prompt = buildReviewPrompt({
+      request: createRequest({ artifact: 'docs/features/1-login/architecture.md', sharedArtifacts: ['docs/architecture.md'] }),
+      common: '共通の指示\n',
+      stagePrompt: '設計の観点\n',
+      knowledge: [{ name: '全体の構成と API の契約の書き方', body: '## 全体の構成\n\n- 1 つの文書に書く\n' }],
+    });
+
+    assert.match(prompt, /設計の観点\n\n## この段階の知識\n\n### 全体の構成と API の契約の書き方\n\n##### 全体の構成\n\n- 1 つの文書に書く\n\n## 依頼の内容/);
+    assert.match(prompt, /- あわせて書き足す文書: `docs\/architecture\.md`/);
   });
 
   it('これまでのレビューがあれば、行へのコメントとあわせて載せる', () => {

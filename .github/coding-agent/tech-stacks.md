@@ -72,9 +72,3 @@
 ### デプロイ
 
 - Cloud Run
-
-## 使い方
-
-- アプリケーションのコードは、すべて `app/` の下に置く。`app/` の中の分け方はアーキテクチャ設計で決める。
-- テストで使う PostgreSQL は、Testcontainers で起動する。
-- ツールのメジャーバージョン (Node.js の LTS、JDK 21) は、`scripts/test.Dockerfile` で固定する

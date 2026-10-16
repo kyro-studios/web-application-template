@@ -25,3 +25,22 @@ export function fence(text) {
   const marker = '~'.repeat(longest + 1);
   return `${marker}text\n${text}\n${marker}`;
 }
+
+/**
+ * 段階に渡す知識 (knowledge.mjs) を、指示の節として組み立てる。知識が無ければ、何も返さない。
+ * 知識のファイルの見出しは、この節の中に収まるよう、3 段下げる。
+ *
+ * @param {{ name: string, body: string }[]} knowledge
+ * @returns {string[]}
+ */
+export function knowledgeLines(knowledge) {
+  if (knowledge.length === 0) {
+    return [];
+  }
+  const lines = ['## この段階の知識', ''];
+  for (const { name, body } of knowledge) {
+    const demoted = body.trim().replace(/^(#{1,6}) /gm, (_, marks) => `${'#'.repeat(Math.min(6, marks.length + 3))} `);
+    lines.push(`### ${name}`, '', demoted, '');
+  }
+  return lines;
+}
