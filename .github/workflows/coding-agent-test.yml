@@ -1,0 +1,28 @@
+name: Test
+
+# アプリケーションの CI (仕様の 11.1)。テストを実行する環境のコンテナの中で、scripts/test.sh を実行するだけにする。
+# テンプレートに固定で用意し、エージェントには書かせない。作成担当のワークフローの機械的な実行 (仕様の 6.4) と
+# 同じスクリプト (run-tests.sh) を使い、結果がそろうようにする。
+# develop の必須のチェック (test) にするため、パスの条件は付けず、Merge Queue のテストでも動かす。
+on:
+  pull_request:
+  merge_group:
+
+# 同じリポジトリのブランチからの PR では、ワークフローが Secrets を使える。エージェントが書いたコンテナの定義や
+# テストのコードから読めないよう、権限は読み取りだけにし、Secrets を参照しない
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # scripts/test.sh が無いとき (プロジェクトの作成の前や、新しい流れを入れる前に始めた機能) は、何もせずに成功する
+      - name: テストを実行する
+        run: bash .github/scripts/coding-agent/run-tests.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/test.log"
