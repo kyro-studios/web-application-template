@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        この Issue を作成すると、要件定義・仕様書・概念モデル・アーキテクチャ設計・実装計画の段階の Issue が、この Issue の Sub Issue として自動で作られます。
+        この Issue を作成すると、要件定義・仕様書・概念モデル・アーキテクチャ設計・プロジェクトの作成・実装計画の段階の Issue が、この Issue の Sub Issue として自動で作られます。
         最初の段階 (要件定義) は、この Issue の作成者に Assign されます。
   - type: input
     id: feature-name
