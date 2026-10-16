@@ -296,6 +296,17 @@ describe('launchStage.run', () => {
     assert.ok(fake.comments[0].body.includes('「プロジェクトの作成」'));
   });
 
+  it('人に引き継いだ (needs-human の付いた) Issue は、force を指定しても起動しない', async () => {
+    const { fake, requirements, specification } = setup();
+    close(fake, requirements.number);
+    specification.labels.push({ name: 'needs-human' });
+
+    const { result } = await run(fake, dispatchContext(specification.number, { force: true }), launchStage);
+
+    assert.equal(result.requests, undefined);
+    assert.equal(fake.comments.length, 0);
+  });
+
   it('作成担当のラベルが無い Issue や、進行役の App が作っていない Issue は起動しない', async () => {
     const { fake, requirements, specification } = setup();
     close(fake, requirements.number);

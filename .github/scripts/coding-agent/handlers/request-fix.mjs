@@ -25,6 +25,7 @@ import { findAgentByBot, fixExecution, getReviewer, isCoordinator } from '../con
 import { getMergeableState, listReviewsBy } from '../github-pulls.mjs';
 import { CONFLICTING_STATE, mergeableStateOptions } from './detect-conflicts.mjs';
 import { NEEDS_HUMAN_LABEL, resolveStageContext, unhandledReason } from '../stage-context.mjs';
+import { isHandOverRequested } from './hand-over.mjs';
 
 /**
  * @typedef {import('../route.mjs').Handler} Handler
@@ -99,6 +100,8 @@ export async function countFixRounds({ github, context, config }, pullRequestNum
 export const requestFix = {
   name: '修正の依頼',
   events: ['workflow_dispatch'],
+  // 人への引き継ぎを依頼する手動実行は、人への引き継ぎ (hand-over.mjs) だけが扱う
+  matches: async ({ context }) => !isHandOverRequested(context),
   run: async (args) => {
     const { github, context, core, config } = args;
     const repository = context.repo;
