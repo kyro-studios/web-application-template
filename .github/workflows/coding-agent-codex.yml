@@ -123,9 +123,9 @@ jobs:
               echo "permission-profile=:read-only" >> "$GITHUB_OUTPUT"
               echo "output-schema=$TRUSTED/.github/coding-agent/plan-schema.json" >> "$GITHUB_OUTPUT"
               ;;
-            implementation)
-              # 実装には、ネットワークや Docker を使える権限の設計が別に必要なため、まだ対応していない
-              echo "::error::Codex による実装タスクには、まだ対応していません (agents.json の roles.implementation.implementers を見直してください)"
+            implementation|project)
+              # コードを変える段階には、ネットワークや Docker を使える権限の設計が別に必要なため、まだ対応していない
+              echo "::error::Codex によるコードを変える段階 (プロジェクトの作成と実装タスク) には、まだ対応していません (agents.json の roles.project.author と roles.implementation.implementers を見直してください)"
               exit 1
               ;;
             *)

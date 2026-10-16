@@ -49,8 +49,8 @@ jobs:
     name: Claude による作業
     if: vars.CODING_AGENT_ENABLED == 'true' && (inputs.mode == 'create' || inputs.mode == 'fix')
     runs-on: ubuntu-latest
-    # 実装タスクでは、ビルドやテストを実行するため、時間の上限を長くする
-    timeout-minutes: ${{ inputs.stage == 'implementation' && 90 || 60 }}
+    # コードを変える段階 (プロジェクトの作成と実装タスク) では、ビルドやテストを実行するため、時間の上限を長くする
+    timeout-minutes: ${{ (inputs.stage == 'implementation' || inputs.stage == 'project') && 90 || 60 }}
     # 作成担当には書き込み権限を持つトークンを渡さない (push と PR の作成は publish ジョブが行う)
     permissions:
       contents: read
@@ -126,7 +126,8 @@ jobs:
           fi
           echo "execution-args=${model:+--model $model}${effort:+ --effort $effort}" >> "$GITHUB_OUTPUT"
           # 実装計画は、ファイルを変更せずに計画を出力する。それ以外は、ファイルを変更してコミットメッセージなどを出力する。
-          # 実装タスクでは、ビルドやテストを確かめられるよう、コマンドの実行 (Bash) も許可する
+          # コードを変える段階 (プロジェクトの作成と実装タスク) では、ビルドやテストを確かめられるよう、コマンドの実行 (Bash) も許可する。
+          # プロジェクトの作成では、変更が要らないことも出力できる (作成のときだけ)
           case "$(jq -r '.stage' "$request")" in
             planning)
               echo "kind=planning" >> "$GITHUB_OUTPUT"
@@ -137,6 +138,15 @@ jobs:
               echo "kind=change" >> "$GITHUB_OUTPUT"
               echo "tools=Read,Edit,Write,Glob,Grep,Bash" >> "$GITHUB_OUTPUT"
               echo "output-schema=$(jq -c . "$TRUSTED/.github/coding-agent/result-schema.json")" >> "$GITHUB_OUTPUT"
+              ;;
+            project)
+              echo "kind=change" >> "$GITHUB_OUTPUT"
+              echo "tools=Read,Edit,Write,Glob,Grep,Bash" >> "$GITHUB_OUTPUT"
+              schema="result-schema.json"
+              if [ "$MODE" = 'create' ]; then
+                schema="project-result-schema.json"
+              fi
+              echo "output-schema=$(jq -c . "$TRUSTED/.github/coding-agent/$schema")" >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "kind=change" >> "$GITHUB_OUTPUT"
@@ -214,7 +224,7 @@ jobs:
           # 振り分け用のワークフロー (github-actions[bot]) からの手動実行を許可する
           allowed_bots: github-actions
           # 文書の段階ではファイルを読み書きするだけ、実装計画では読むだけで、コマンドは実行しない。
-          # 実装タスクでは、コマンドも実行する (コマンドから認証の値を読めるため、漏れたときの被害を抑える。仕様の 6.3)
+          # コードを変える段階では、コマンドも実行する (コマンドから認証の値を読めるため、漏れたときの被害を抑える。仕様の 6.3)
           claude_args: >-
             --allowedTools "${{ steps.request.outputs.tools }}"
             --json-schema '${{ steps.request.outputs.output-schema }}'

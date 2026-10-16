@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "properties": {
+    "commit_message": {
+      "type": "string",
+      "description": "Conventional Commits 形式のコミットメッセージ。1 行目は `<type>: <概要>` とし、PR のタイトルにも使う。変更が要らない場合は空にする"
+    },
+    "pull_request_body": {
+      "type": "string",
+      "description": "PR の説明 (Markdown)。変更内容の要約と、確かめた内容や残っている課題を書く。変更が要らない場合は空にする"
+    },
+    "unchanged_reason": {
+      "type": ["string", "null"],
+      "description": "プロジェクトに変更が要らない場合だけ、その理由 (Markdown)。変更した場合は null にする"
+    }
+  },
+  "required": ["commit_message", "pull_request_body", "unchanged_reason"],
+  "additionalProperties": false
+}
