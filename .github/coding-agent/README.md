@@ -133,7 +133,7 @@ node .github/scripts/coding-agent/setup-repository.mjs --repo <owner>/<name>
 
 | オプション | 内容 |
 | --- | --- |
-| `--required-check <名前>` | `develop` で必須にするステータスチェック。複数指定できる。省略すると `commitlint` だけを必須にする |
+| `--required-check <名前>` | `develop` で必須にするステータスチェック。複数指定できる。省略すると `commitlint` と、アプリケーションの CI の `test` を必須にする |
 | `--main-bypass-team <slug>` | `main` を更新できる Team。複数指定できる。Organization のオーナーは、指定しなくても PR を通して更新できる |
 
 ## 6. Variables を設定する
@@ -145,6 +145,7 @@ node .github/scripts/coding-agent/setup-repository.mjs --repo <owner>/<name>
 | `CODING_AGENT_ENABLED` | `true` (必須) | (未設定のあいだは、どのワークフローも何もしない) |
 | `REVIEW_MAX_FIX_ROUNDS` | エージェントが 1 つの PR を修正する回数の上限 | 3 |
 | `PLANNER_MAX_TASKS` | 1 回の実装計画で作成できる実装タスクの上限 | 30 |
+| `TEST_MAX_FIX_ATTEMPTS` | テストの機械的な実行で失敗したときに、エージェントに直させる回数の上限 (最大 3) | 2 |
 
 ## 7. 動作を確かめる
 
@@ -160,6 +161,7 @@ node .github/scripts/coding-agent/setup-repository.mjs --repo <owner>/<name>
 
 - 要件定義書を書き、レビューの指摘を直す
 - 修正の回数が上限に達して、`needs-human` ラベルが付いた PR に対応する。対応したら `needs-human` ラベルを外すと、改めてレビューされる
+- テストの機械的な実行で、決めた回数まで直させてもテストが通らず、`needs-human` ラベルが付いた Issue や PR に対応する。原因を直したら、PR はラベルを外す (改めてレビューされる)。Issue はラベルを外し、「振り分けをやり直す」の手順で `force` を付けて手動実行する
 - 実装計画で、担当が人になった実装タスクに対応して、Issue を Close する
 - `develop` から `main` へマージする
 
