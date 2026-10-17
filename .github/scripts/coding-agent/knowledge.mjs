@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
- * @typedef {'scope' | 'acceptance-criteria' | 'tech-stacks' | 'architecture-documents' | 'project' | 'architecture-rules' | 'implementation'} KnowledgeId
+ * @typedef {'scope' | 'acceptance-criteria' | 'acceptance-tests' | 'tech-stacks' | 'architecture-documents' | 'project' | 'architecture-rules' | 'implementation'} KnowledgeId
  */
 
 /**
@@ -25,6 +25,7 @@ export const KNOWLEDGE_ROOT = fileURLToPath(new URL('../../coding-agent/', impor
  */
 export const KNOWLEDGE = {
   scope: { name: 'スコープの決め方', path: 'prompts/knowledge/scope.md' },
+  'acceptance-tests': { name: '受け入れテストの書き方', path: 'prompts/knowledge/acceptance-tests.md' },
   'acceptance-criteria': { name: '受け入れ基準の書き方', path: 'prompts/knowledge/acceptance-criteria.md' },
   'tech-stacks': { name: '既定の技術スタック', path: 'tech-stacks.md' },
   'architecture-documents': { name: '全体の構成と API の契約の書き方', path: 'prompts/knowledge/architecture-documents.md' },
@@ -42,7 +43,7 @@ export const STAGE_KNOWLEDGE = {
   specification: ['scope', 'acceptance-criteria'],
   architecture: ['scope', 'tech-stacks', 'architecture-documents'],
   project: ['project', 'architecture-rules'],
-  implementation: ['implementation'],
+  implementation: ['implementation', 'acceptance-tests'],
 };
 
 /**

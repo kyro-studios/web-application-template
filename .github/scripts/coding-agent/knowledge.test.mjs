@@ -12,7 +12,7 @@ describe('段階に渡す知識', () => {
       specification: ['scope', 'acceptance-criteria'],
       architecture: ['scope', 'tech-stacks', 'architecture-documents'],
       project: ['project', 'architecture-rules'],
-      implementation: ['implementation'],
+      implementation: ['implementation', 'acceptance-tests'],
     });
   });
 

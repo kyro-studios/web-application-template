@@ -18,7 +18,7 @@
       "allow": ["app/**", "architecture-rules/**", "scripts/test.sh", "scripts/start-app.sh", "scripts/test.Dockerfile"]
     },
     "implementation": {
-      "allow": ["app/**"]
+      "allow": ["app/**", "acceptance/tests/**"]
     }
   }
 }
