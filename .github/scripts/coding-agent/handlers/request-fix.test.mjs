@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
+import { assignmentMarker, formatCriteriaFile } from '../acceptance-criteria.mjs';
 import { createFakeCore, createFakeGitHub } from '../testing/fake-github.mjs';
 import { fixtureConfig } from '../testing/fixture-config.mjs';
 import { mergeableStateOptions } from './detect-conflicts.mjs';
@@ -256,5 +257,54 @@ describe('修正の印', () => {
     const { readFile } = await import('node:fs/promises');
     const workflow = await readFile(new URL('../../../workflows/coding-agent-publish.yml', import.meta.url), 'utf8');
     assert.ok(workflow.includes(FIX_MARKER));
+  });
+});
+
+describe('requestFix (実装タスクの受け入れ基準)', () => {
+  /**
+   * PR が Close する Issue を、受け入れ基準を割り当てた実装タスクに置き換える。
+   *
+   * @param {string} body 実装タスクの Issue の本文
+   * @param {string | undefined} criteria 受け入れ基準のファイル (省略すると、ファイルが無い機能)
+   */
+  function setupTask(body, criteria) {
+    const { fake, feature } = setup();
+    const planning = fake.addIssue({ title: '実装計画', labels: ['stage:planning'], parent: feature.number });
+    const task = fake.addIssue({ title: 'API を作る', body, labels: ['stage:implementation', 'agent:claude'], parent: planning.number });
+    const pull = fake.pulls.get(PR_NUMBER);
+    assert.ok(pull?.detail);
+    pull.closing = [task.number];
+    pull.detail.body = 'Closes #' + task.number;
+    if (criteria !== undefined) {
+      fake.files.set('docs/features/1-user-login/acceptance-criteria.json', criteria);
+    }
+    return { fake, task };
+  }
+
+  const file = formatCriteriaFile({
+    feature: 1,
+    next_number: 3,
+    criteria: ['AC1-1', 'AC1-2'].map((id) => ({ id, kind: 'api', behavior: 'a', expected: 'b', spec_reference: 'c' })),
+  });
+
+  it('割り当ての印から読んだ識別子を、修正の依頼の資料に含める', async () => {
+    const { fake } = setupTask('本文\n\n' + assignmentMarker(['AC1-2']), file);
+    const { result } = await run(fake);
+    assert.deepEqual(result.requests?.[0].materials.acceptanceCriteria, ['AC1-2']);
+  });
+
+  it('受け入れ基準のファイルが無い機能では、null にする', async () => {
+    const { fake } = setupTask('本文', undefined);
+    const { result } = await run(fake);
+    assert.equal(result.requests?.[0].materials.acceptanceCriteria, null);
+  });
+
+  it('割り当ての印が壊れていれば、修正を依頼せずに PR で知らせる', async () => {
+    const { fake } = setupTask('印の無い本文', file);
+    const { result } = await run(fake);
+    assert.deepEqual(result, {});
+    const comment = fake.comments.at(-1);
+    assert.equal(comment?.issue_number, PR_NUMBER);
+    assert.match(comment?.body ?? '', /修正を依頼できませんでした。#\d+ の本文に、受け入れ基準の割り当ての印がありません/);
   });
 });
