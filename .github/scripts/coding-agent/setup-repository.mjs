@@ -9,7 +9,7 @@
  *   node .github/scripts/coding-agent/setup-repository.mjs --repo <owner>/<name> [オプション]
  *
  * オプション:
- *   --required-check <名前>     develop で必須にするステータスチェック (複数指定できる。既定は commitlint)
+ *   --required-check <名前>     develop で必須にするステータスチェック (複数指定できる。既定は commitlint と test)
  *   --main-bypass-team <slug>   main を更新できる Team (複数指定できる。Organization のオーナーは常に更新できる)
  *   --dry-run                   変更の内容を表示するだけで、変更しない
  */
@@ -24,8 +24,8 @@ export const DEVELOP_BRANCH = 'develop';
 /** 人がマージするブランチ */
 export const MAIN_BRANCH = 'main';
 
-/** 必須のステータスチェックの既定値 (テンプレートに含まれる commitlint のジョブ) */
-export const DEFAULT_REQUIRED_CHECKS = ['commitlint'];
+/** 必須のステータスチェックの既定値 (テンプレートに含まれる commitlint のジョブと、アプリケーションの CI の test のジョブ) */
+export const DEFAULT_REQUIRED_CHECKS = ['commitlint', 'test'];
 
 /** ルールセットの名前 (同じ名前のルールセットがあれば更新する) */
 export const RULESET_NAMES = {
@@ -50,7 +50,7 @@ export const LABELS = [
   { name: 'stage:project', color: 'c5def5', description: '段階: プロジェクトの作成' },
   { name: 'stage:planning', color: 'c5def5', description: '段階: 実装計画' },
   { name: 'stage:implementation', color: 'bfdadc', description: '段階: 実装タスク' },
-  { name: 'needs-human', color: 'd93f0b', description: 'エージェントの修正が上限に達し、人の対応が必要' },
+  { name: 'needs-human', color: 'd93f0b', description: 'エージェントだけでは進められず、人の対応が必要' },
 ];
 
 /**

@@ -35,6 +35,7 @@ import { closeParent } from './handlers/close-parent.mjs';
 import { findHaltIssue } from './halt.mjs';
 import { detectConflicts } from './handlers/detect-conflicts.mjs';
 import { detectUntrackedChanges } from './handlers/detect-untracked-changes.mjs';
+import { handOver } from './handlers/hand-over.mjs';
 import { launchStage, wakeWaitingStages } from './handlers/launch-stage.mjs';
 import { requestFix } from './handlers/request-fix.mjs';
 import { requestReview } from './handlers/request-review.mjs';
@@ -74,7 +75,7 @@ import { startFeature } from './handlers/start-feature.mjs';
  * イベントごとの処理。作る順番に沿って追加していく。
  * @type {readonly Handler[]}
  */
-export const HANDLERS = [startFeature, closeParent, wakeWaitingStages, launchStage, requestReview, requestFix, detectUntrackedChanges, detectConflicts];
+export const HANDLERS = [startFeature, closeParent, wakeWaitingStages, launchStage, requestReview, requestFix, handOver, detectUntrackedChanges, detectConflicts];
 
 /**
  * 停止中の Issue に残すための、イベントの説明を作る。

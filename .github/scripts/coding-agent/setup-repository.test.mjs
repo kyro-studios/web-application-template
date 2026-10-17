@@ -24,7 +24,12 @@ function findRule(ruleset, type) {
 }
 
 describe('parseOptions', () => {
-  it('必須のチェックを省略すると commitlint を必須にする', () => {
+  it('必須のチェックを省略すると commitlint と test を必須にする', async () => {
+    assert.deepEqual(DEFAULT_REQUIRED_CHECKS, ['commitlint', 'test']);
+    // test は、テンプレートに固定で用意するアプリケーションの CI のジョブの名前
+    const { readFile } = await import('node:fs/promises');
+    const workflow = await readFile(new URL('../../workflows/coding-agent-test.yml', import.meta.url), 'utf8');
+    assert.match(workflow, /^ {2}test:\r?\n {4}name: test\r?$/m);
     assert.deepEqual(parseOptions(['--repo', 'kyro-studios/sandbox']), {
       owner: 'kyro-studios',
       repo: 'sandbox',

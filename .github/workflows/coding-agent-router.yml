@@ -19,6 +19,17 @@ on:
         type: boolean
         required: false
         default: false
+      # エージェントのワークフローが、人への引き継ぎを依頼するときに指定する (handlers/hand-over.mjs)
+      hand-over:
+        description: 人に引き継ぐ理由 (test-failure)。空なら、段階の起動と修正の依頼を行う
+        type: string
+        required: false
+        default: ''
+      source-run-id:
+        description: 人への引き継ぎのきっかけになった、エージェントのワークフローの実行の ID
+        type: string
+        required: false
+        default: ''
 
 permissions: {}
 

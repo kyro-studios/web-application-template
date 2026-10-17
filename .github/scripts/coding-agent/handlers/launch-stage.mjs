@@ -17,10 +17,12 @@
 import { isTrustedActor } from '../actors.mjs';
 import { agentLabel, expandStageFiles, featureDirectory, findAgentByLabel, getAuthor, getImplementers, isCoordinator, isValidFeatureName } from '../config.mjs';
 import { maxPlanTasks } from '../create-tasks.mjs';
-import { findLabeledAncestor, findUnresolvedDependencies, findWaitingIssueNumbers, measureIssueDepth } from '../github-issues.mjs';
+import { findLabeledAncestor, findUnresolvedDependencies, findWaitingIssueNumbers, hasLabel, measureIssueDepth } from '../github-issues.mjs';
 import { MAX_SUB_ISSUE_LEVELS } from '../plan-validation.mjs';
 import { FEATURE_NAME_FIELD, parseIssueForm } from '../issue-form.mjs';
 import { stageName } from '../prompt-format.mjs';
+import { NEEDS_HUMAN_LABEL } from '../stage-context.mjs';
+import { isHandOverRequested } from './hand-over.mjs';
 import { artifactPath, FEATURE_LABEL, IMPLEMENTATION_STAGE, reviewDocuments, sharedArtifactPaths, stageOf } from '../stages.mjs';
 
 /**
@@ -51,6 +53,10 @@ async function checkLaunchable({ github, context, config }, issue) {
   const stage = stageOf(issue.labels);
   if (!isCoordinator(config.agents, issue.user?.login) || stage === undefined) {
     return { reason: '段階の Issue ではありません' };
+  }
+  // 人に引き継いだ Issue は、人が needs-human ラベルを外すまで起動しない (仕様の 6.4)
+  if (hasLabel(issue.labels, NEEDS_HUMAN_LABEL)) {
+    return { reason: `${NEEDS_HUMAN_LABEL} ラベルが付いています (人が対応してラベルを外すまで起動しません)` };
   }
   if (!CREATABLE_STAGES.includes(/** @type {typeof CREATABLE_STAGES[number]} */ (stage))) {
     return { reason: `「${stage}」の段階の起動には、まだ対応していません` };
@@ -122,7 +128,8 @@ export const launchStage = {
     if (context.eventName === 'issues') {
       return findAgentByLabel(config.agents, context.payload.label?.name) !== undefined;
     }
-    return true;
+    // 人への引き継ぎを依頼する手動実行は、人への引き継ぎ (hand-over.mjs) だけが扱う
+    return !isHandOverRequested(context);
   },
   run: async (args) => {
     const { github, context, core, config } = args;
