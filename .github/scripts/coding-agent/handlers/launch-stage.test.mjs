@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { assignmentMarker, formatCriteriaFile } from '../acceptance-criteria.mjs';
 import { createFakeCore, createFakeGitHub } from '../testing/fake-github.mjs';
 import { fixtureConfig } from '../testing/fixture-config.mjs';
 import { LAUNCH_MARKER, launchStage, wakeWaitingStages } from './launch-stage.mjs';
@@ -187,6 +188,7 @@ describe('launchStage.run', () => {
         'docs/features/1-user-login/specification.md',
         'docs/features/1-user-login/domain-model.md',
         'docs/features/1-user-login/architecture.md',
+        'docs/features/1-user-login/acceptance-criteria.json',
         'docs/architecture.md',
         'docs/api/openapi.yaml',
       ],
@@ -233,6 +235,65 @@ describe('launchStage.run', () => {
     assert.equal(fake.comments.length, 0);
   });
 
+  describe('受け入れ基準 (仕様の 10.4)', () => {
+    const criteriaPath = 'docs/features/1-user-login/acceptance-criteria.json';
+    const criteria = {
+      feature: 1,
+      next_number: 3,
+      criteria: ['AC1-1', 'AC1-2'].map((id) => ({ id, kind: /** @type {const} */ ('api'), behavior: 'a', expected: 'b', spec_reference: 'c' })),
+    };
+
+    it('実装計画では、機能の受け入れ基準の識別子を依頼に含める。ファイルが無い機能では null にする', async () => {
+      const { fake, architecture, planning } = setup();
+      close(fake, architecture.number);
+      assert.equal((await run(fake, dispatchContext(planning.number), launchStage)).result.requests?.[0].materials.acceptanceCriteria, null);
+
+      fake.files.set(criteriaPath, formatCriteriaFile(criteria));
+      const { result } = await run(fake, dispatchContext(planning.number, { force: true }), launchStage);
+      assert.deepEqual(result.requests?.[0].materials.acceptanceCriteria, ['AC1-1', 'AC1-2']);
+    });
+
+    it('実装タスクでは、本文の割り当ての印から、割り当てられた識別子を依頼に含める', async () => {
+      const { fake, planning } = setup();
+      fake.files.set(criteriaPath, formatCriteriaFile(criteria));
+      const task = fake.addIssue({ body: `本文\n\n${assignmentMarker(['AC1-2'])}`, labels: ['stage:implementation', 'agent:claude'], parent: planning.number });
+
+      const { result } = await run(fake, dispatchContext(task.number), launchStage);
+
+      assert.deepEqual(result.requests?.[0].materials.acceptanceCriteria, ['AC1-2']);
+    });
+
+    it('割り当ての印が無いか壊れているか、受け入れ基準のファイルが形式を満たさなければ、起動せずに Issue で知らせる', async () => {
+      const { fake, planning } = setup();
+      fake.files.set(criteriaPath, formatCriteriaFile(criteria));
+      for (const [body, reason] of [
+        ['印の無い本文', /割り当ての印がありません/],
+        [`${assignmentMarker(['AC1-1'])}\n${assignmentMarker(['AC1-2'])}`, /2 つ以上あります/],
+        ['<!-- coding-agent-acceptance-criteria: ac1-1 -->', /形式が正しくありません/],
+        [assignmentMarker(['AC1-9']), /AC1-9 が、受け入れ基準のファイルにありません/],
+      ]) {
+        const task = fake.addIssue({ body: /** @type {string} */ (body), labels: ['stage:implementation', 'agent:claude'], parent: planning.number });
+        assert.deepEqual((await run(fake, dispatchContext(task.number), launchStage)).result, {});
+        const comment = fake.comments.at(-1);
+        assert.equal(comment?.issue_number, task.number);
+        assert.match(comment?.body ?? '', /** @type {RegExp} */ (reason));
+        assert.ok(!comment?.body.includes(LAUNCH_MARKER));
+      }
+
+      fake.files.set(criteriaPath, '{ "feature": 1 }');
+      const task = fake.addIssue({ body: assignmentMarker(['AC1-1']), labels: ['stage:implementation', 'agent:claude'], parent: planning.number });
+      assert.deepEqual((await run(fake, dispatchContext(task.number), launchStage)).result, {});
+      assert.match(fake.comments.at(-1)?.body ?? '', /受け入れ基準のファイルが形式を満たしていません/);
+    });
+
+    it('受け入れ基準のファイルが無い機能の実装タスクは、印を読まずに起動する', async () => {
+      const { fake, planning } = setup();
+      const task = fake.addIssue({ body: '印の無い本文', labels: ['stage:implementation', 'agent:claude'], parent: planning.number });
+      const { result } = await run(fake, dispatchContext(task.number), launchStage);
+      assert.equal(result.requests?.[0].materials.acceptanceCriteria, null);
+    });
+  });
+
   it('実装計画では、担当に選べるエージェントとタスクの上限を依頼に含め、変更してよいファイルは含めない', async () => {
     const { fake, architecture, planning } = setup();
     close(fake, architecture.number);
@@ -252,6 +313,7 @@ describe('launchStage.run', () => {
         'docs/features/1-user-login/specification.md',
         'docs/features/1-user-login/domain-model.md',
         'docs/features/1-user-login/architecture.md',
+        'docs/features/1-user-login/acceptance-criteria.json',
         'docs/architecture.md',
         'docs/api/openapi.yaml',
       ],

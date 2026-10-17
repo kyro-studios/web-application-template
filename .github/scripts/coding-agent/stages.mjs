@@ -18,6 +18,7 @@
  * @property {SharedDocumentId[]} sharedArtifacts あわせて書き足す、機能をまたいで使う文書
  * @property {FeatureStage[]} inputs 担当に渡す、前の段階までの成果物
  * @property {SharedDocumentId[]} sharedInputs 担当に渡す、機能をまたいで使う文書
+ * @property {boolean} [acceptanceCriteriaInput] 担当に、受け入れ基準のファイル (仕様の 10.2) も渡すか
  * @property {string} task 担当の作業内容
  */
 
@@ -93,7 +94,8 @@ export const FEATURE_STAGES = [
     sharedArtifacts: [],
     inputs: ['specification', 'domain-model', 'architecture'],
     sharedInputs: ['architecture', 'api'],
-    task: '仕様書、概念モデル、アーキテクチャ設計をもとに、実装タスクの Issue に分割してください。',
+    acceptanceCriteriaInput: true,
+    task: '仕様書、受け入れ基準、概念モデル、アーキテクチャ設計をもとに、実装タスクの Issue に分割してください。',
   },
 ];
 
@@ -151,6 +153,7 @@ export function reviewDocuments(stage, featureDir) {
       const source = getFeatureStage(input);
       return { name: source.name, path: `${featureDir}/${source.artifact}` };
     }),
+    ...(definition.acceptanceCriteriaInput === true ? [{ name: '受け入れ基準', path: acceptanceCriteriaPath(featureDir) }] : []),
     ...definition.sharedInputs.map((id) => ({ ...SHARED_DOCUMENTS[id] })),
   ];
 }

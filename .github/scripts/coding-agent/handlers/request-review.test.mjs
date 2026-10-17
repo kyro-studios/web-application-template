@@ -171,6 +171,7 @@ describe('requestReview.run', () => {
         'docs/features/1-user-login/specification.md',
         'docs/features/1-user-login/domain-model.md',
         'docs/features/1-user-login/architecture.md',
+        'docs/features/1-user-login/acceptance-criteria.json',
         'docs/architecture.md',
         'docs/api/openapi.yaml',
       ],

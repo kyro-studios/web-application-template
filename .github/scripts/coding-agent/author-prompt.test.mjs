@@ -59,6 +59,24 @@ describe('buildCreatePrompt', () => {
     assert.match(prompt, /- 実装タスクの担当に選べるエージェント: `claude` \(Claude Code\)/);
     assert.match(prompt, /- タスクの数の上限: 30 件/);
     assert.match(prompt, /- 親子関係の深さの上限: 6 階層/);
+    assert.doesNotMatch(prompt, /受け入れ基準/);
+  });
+
+  it('実装計画では、受け入れ基準の識別子を依頼の内容に書く。基準が無い機能では、割り当てないよう書く', () => {
+    const planning = {
+      ...materials,
+      artifact: null,
+      allowedFiles: null,
+      implementers: [{ id: 'claude', name: 'Claude Code' }],
+      planLimits: { maxTasks: 30, maxDepth: 6 },
+    };
+    const build = (/** @type {string[] | null} */ acceptanceCriteria) =>
+      buildCreatePrompt({
+        prompts: ['計画の指示'],
+        request: { ...baseRequest, mode: 'create', stage: 'planning', pullRequestNumber: null, materials: { ...planning, acceptanceCriteria } },
+      });
+    assert.match(build(['AC1-1', 'AC1-2']), /- 受け入れ基準の識別子 \(それぞれを、ちょうど 1 つのタスクに割り当てる\): AC1-1、AC1-2/);
+    assert.match(build(null), /- 受け入れ基準: この機能にはありません。どのタスクの acceptance_criteria も空にしてください/);
   });
 
   it('段階に渡す知識を、指示の後に、見出しを下げて加える', () => {
