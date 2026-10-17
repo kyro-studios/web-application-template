@@ -427,7 +427,8 @@ jobs:
             --request "$REQUEST_FILE" \
             --prompts trusted/.github/coding-agent/prompts/review \
             --prompt-out "$REVIEW_DIR/prompt.md" \
-            --review-out "$REVIEW_DIR/review.json"
+            --review-out "$REVIEW_DIR/review.json" \
+            --workspace pull-request
           if [ -f "$REVIEW_DIR/prompt.md" ]; then
             delimiter="PROMPT_$(openssl rand -hex 16)"
             {

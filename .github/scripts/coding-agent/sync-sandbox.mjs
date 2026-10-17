@@ -41,10 +41,10 @@ const REPOSITORY_PATTERN = /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/;
 export const SYNCED_PATTERNS = MECHANISM_FILE_PATTERNS;
 
 /**
- * テンプレートにあるが、取り込まないファイル。確認用のリポジトリに固有の設定 (agents.json) と、
+ * テンプレートにあるが、取り込まないファイル。確認用のリポジトリに固有の設定 (agents.json、プロジェクトの背景の docs/project.md) と、
  * テンプレートから作ったリポジトリ (エージェントを含む) が書き換えるファイル。SYNCED_PATTERNS より優先する
  */
-export const NOT_SYNCED_PATTERNS = [`${CONFIG_DIR}/agents.json`, '.gitignore', 'README.md', 'AGENTS.md', '.vscode/**'];
+export const NOT_SYNCED_PATTERNS = [`${CONFIG_DIR}/agents.json`, '.gitignore', 'README.md', 'AGENTS.md', '.vscode/**', 'docs/project.md'];
 
 /**
  * @param {string} path リポジトリのルートからのパス

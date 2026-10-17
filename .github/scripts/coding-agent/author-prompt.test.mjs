@@ -168,6 +168,48 @@ describe('buildFixPrompt (コンフリクト)', () => {
   });
 });
 
+describe('プロジェクトの背景', () => {
+  it('作成では、知識の後、依頼の内容の前に、背景を加える', () => {
+    const prompt = buildCreatePrompt({
+      prompts: ['共通の指示'],
+      knowledge: [{ name: 'スコープの決め方', body: '方針に合わせる' }],
+      projectBackground: '# 背景\n\n## 方針\n\nC > D > Q',
+      request: { ...baseRequest, mode: 'create', pullRequestNumber: null, materials },
+    });
+    assert.match(prompt, /方針に合わせる\n\n## プロジェクトの背景\n\n.+\n\n### 背景\n\n#### 方針\n\nC > D > Q\n\n## 依頼の内容/);
+  });
+
+  it('修正でも、作成と同じ位置に背景を加える', () => {
+    const prompt = buildFixPrompt({
+      prompts: ['修正の指示', '仕様書の指示'],
+      projectBackground: null,
+      request: {
+        ...baseRequest,
+        id: 'fix-pr-8-0123456',
+        mode: 'fix',
+        pullRequestNumber: 8,
+        materials: {
+          ...materials,
+          pullRequest: { number: 8, title: 'docs: 仕様書を追加する', body: 'Closes #3', headRef: 'coding-agent/claude/issue-3-1' },
+          review: { id: 1, body: '所見', comments: [] },
+          conflict: null,
+          fixRound: 1,
+          maxFixRounds: 3,
+        },
+      },
+    });
+    assert.match(prompt, /仕様書の指示\n\n## プロジェクトの背景\n\n.*まだ書かれていません.*\n\n## 依頼の内容/);
+  });
+
+  it('背景を渡さない段階 (省略) では、背景の節を加えない', () => {
+    const prompt = buildCreatePrompt({
+      prompts: ['共通の指示'],
+      request: { ...baseRequest, mode: 'create', stage: 'domain-model', pullRequestNumber: null, materials },
+    });
+    assert.doesNotMatch(prompt, /プロジェクトの背景/);
+  });
+});
+
 describe('今の受け入れ基準 (仕様書の段階)', () => {
   const criteria = [{ id: 'AC1-1', kind: /** @type {const} */ ('api'), behavior: 'ログインする', expected: '200 を返す', spec_reference: '2.1' }];
   const fixMaterials = {

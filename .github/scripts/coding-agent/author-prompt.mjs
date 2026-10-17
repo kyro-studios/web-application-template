@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { readKnowledge } from './knowledge.mjs';
+import { projectBackgroundFor, projectBackgroundLines } from './project-background.mjs';
 import { fence, knowledgeLines, stageName } from './prompt-format.mjs';
 import { acceptanceCriteriaPath, IMPLEMENTATION_STAGE } from './stages.mjs';
 
@@ -165,12 +166,14 @@ function issueBodyLines({ issue, feature }) {
  * @param {string[]} args.prompts 指示のファイルの本文 (promptFiles の順)
  * @param {{ name: string, body: string }[]} [args.knowledge] 段階に渡す知識 (readKnowledge で読んだもの)
  * @param {import('./acceptance-criteria.mjs').Criterion[] | null} [args.acceptanceCriteria] 今の受け入れ基準 (仕様書の段階のみ。無ければ null)
+ * @param {string | null} [args.projectBackground] プロジェクトの背景 (無ければ null。背景を渡さない段階では省略する)
  * @returns {string}
  */
-export function buildCreatePrompt({ request, prompts, knowledge = [], acceptanceCriteria }) {
+export function buildCreatePrompt({ request, prompts, knowledge = [], acceptanceCriteria, projectBackground }) {
   const lines = [
     ...prompts.flatMap((prompt) => [prompt.trim(), '']),
     ...knowledgeLines(knowledge),
+    ...projectBackgroundLines(projectBackground),
     '## 依頼の内容',
     '',
     ...requestLines(request),
@@ -189,9 +192,10 @@ export function buildCreatePrompt({ request, prompts, knowledge = [], acceptance
  *   コンフリクトの解消の指示 (コンフリクトの修正のみ)、受け入れ基準の出力の指示 (仕様書の段階のみ))
  * @param {{ name: string, body: string }[]} [args.knowledge] 段階に渡す知識 (readKnowledge で読んだもの)
  * @param {import('./acceptance-criteria.mjs').Criterion[] | null} [args.acceptanceCriteria] 今の受け入れ基準 (仕様書の段階のみ。無ければ null)
+ * @param {string | null} [args.projectBackground] プロジェクトの背景 (無ければ null。背景を渡さない段階では省略する)
  * @returns {string}
  */
-export function buildFixPrompt({ request, prompts, knowledge = [], acceptanceCriteria }) {
+export function buildFixPrompt({ request, prompts, knowledge = [], acceptanceCriteria, projectBackground }) {
   const [common, stagePrompt, ...rest] = prompts;
   const { pullRequest, review, conflict, fixRound, maxFixRounds } = request.materials;
   const conflictPrompt = conflict ? rest.shift() : undefined;
@@ -210,6 +214,7 @@ export function buildFixPrompt({ request, prompts, knowledge = [], acceptanceCri
     stagePrompt.trim(),
     '',
     ...knowledgeLines(knowledge),
+    ...projectBackgroundLines(projectBackground),
     '## 依頼の内容',
     '',
     `- PR: #${pullRequest.number} ${pullRequest.title}`,
@@ -295,8 +300,10 @@ async function main(args) {
   const prompts = await Promise.all(files.map((file) => readFile(join(promptsDir, file), 'utf8')));
   const knowledge = await readKnowledge(request.stage);
   const acceptanceCriteria = request.stage === ACCEPTANCE_CRITERIA_STAGE ? await readCurrentCriteria(request.materials.featureDir) : undefined;
+  // 作業ディレクトリ (作業を始めるコミットをチェックアウトしたもの) で実行するため、背景は今のディレクトリから読む
+  const projectBackground = await projectBackgroundFor(request.stage);
   const build = request.mode === 'fix' ? buildFixPrompt : buildCreatePrompt;
-  await writeFile(/** @type {string} */ (values['prompt-out']), build({ request, prompts, knowledge, acceptanceCriteria }));
+  await writeFile(/** @type {string} */ (values['prompt-out']), build({ request, prompts, knowledge, acceptanceCriteria, projectBackground }));
   console.log(request.mode === 'fix' ? '修正の指示を作成しました' : '作成の指示を作成しました');
 }
 

@@ -6,6 +6,9 @@
  *
  * 使い方 (レビュー担当のワークフローから実行する):
  *   node review-prompt.mjs --request <依頼の JSON> --prompts <指示のディレクトリ> --prompt-out <指示の出力先> --review-out <差し戻しの結果の出力先>
+ *     [--workspace <PR の head をチェックアウトしたディレクトリ>]
+ *
+ * --workspace は、プロジェクトの背景 (docs/project.md) を読むディレクトリ。省略すると、今のディレクトリから読む。
  *
  * GITHUB_OUTPUT に、skip-review (範囲外のファイルがあり、レビュー担当を呼ばないなら 'true') を出力する。
  */
@@ -15,6 +18,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { readKnowledge } from './knowledge.mjs';
+import { projectBackgroundFor, projectBackgroundLines } from './project-background.mjs';
 import { fence, knowledgeLines, stageName } from './prompt-format.mjs';
 
 /**
@@ -47,9 +51,10 @@ import { fence, knowledgeLines, stageName } from './prompt-format.mjs';
  * @param {string} args.common すべての段階に共通する指示
  * @param {string} args.stagePrompt 段階ごとの観点
  * @param {{ name: string, body: string }[]} [args.knowledge] 段階に渡す知識 (作成担当と同じもの)
+ * @param {string | null} [args.projectBackground] プロジェクトの背景 (作成担当と同じもの。無ければ null。背景を渡さない段階では省略する)
  * @returns {string}
  */
-export function buildReviewPrompt({ request, common, stagePrompt, knowledge = [] }) {
+export function buildReviewPrompt({ request, common, stagePrompt, knowledge = [], projectBackground }) {
   const { pullRequest, issue, feature, artifact, sharedArtifacts = [], documents, previousReviews } = request.materials;
   const lines = [
     common.trim(),
@@ -57,6 +62,7 @@ export function buildReviewPrompt({ request, common, stagePrompt, knowledge = []
     stagePrompt.trim(),
     '',
     ...knowledgeLines(knowledge),
+    ...projectBackgroundLines(projectBackground),
     '## 依頼の内容',
     '',
     `- 段階: ${stageName(request.stage)}`,
@@ -129,6 +135,7 @@ async function main(args) {
       prompts: { type: 'string' },
       'prompt-out': { type: 'string' },
       'review-out': { type: 'string' },
+      workspace: { type: 'string' },
     },
     strict: true,
   });
@@ -156,7 +163,8 @@ async function main(args) {
       readFile(join(promptsDir, `${request.stage}.md`), 'utf8'),
     ]);
     const knowledge = await readKnowledge(request.stage);
-    await writeFile(/** @type {string} */ (values['prompt-out']), buildReviewPrompt({ request, common, stagePrompt, knowledge }));
+    const projectBackground = await projectBackgroundFor(request.stage, values.workspace);
+    await writeFile(/** @type {string} */ (values['prompt-out']), buildReviewPrompt({ request, common, stagePrompt, knowledge, projectBackground }));
   }
 
   if (process.env.GITHUB_OUTPUT) {

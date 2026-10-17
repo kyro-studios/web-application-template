@@ -43,7 +43,7 @@ describe('classifyPath', () => {
   });
 
   it('確認用のリポジトリに固有の設定と、テンプレートから作ったリポジトリが書き換えるファイルは取り込まない', () => {
-    for (const path of ['.github/coding-agent/agents.json', '.gitignore', 'README.md', 'AGENTS.md', '.vscode/settings.json']) {
+    for (const path of ['.github/coding-agent/agents.json', '.gitignore', 'README.md', 'AGENTS.md', '.vscode/settings.json', 'docs/project.md']) {
       assert.equal(classifyPath(path), 'not-synced', path);
     }
   });

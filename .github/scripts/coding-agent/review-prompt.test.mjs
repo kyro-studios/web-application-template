@@ -63,6 +63,23 @@ describe('buildReviewPrompt', () => {
     assert.match(prompt, /- あわせて書き足す文書: `docs\/architecture\.md`/);
   });
 
+  it('作成担当と同じプロジェクトの背景を、知識の後に加える', () => {
+    const prompt = buildReviewPrompt({
+      request: createRequest(),
+      common: '共通の指示\n',
+      stagePrompt: '仕様書の観点\n',
+      knowledge: [{ name: 'スコープの決め方', body: '方針に合わせる' }],
+      projectBackground: '# 背景\n\n## 方針\n\nC > D > Q',
+    });
+
+    assert.match(prompt, /方針に合わせる\n\n## プロジェクトの背景\n\n.+\n\n### 背景\n\n#### 方針\n\nC > D > Q\n\n## 依頼の内容/);
+  });
+
+  it('背景を渡さない段階 (省略) では、背景の節を加えない', () => {
+    const prompt = buildReviewPrompt({ request: createRequest(), common: '共通の指示\n', stagePrompt: '概念モデルの観点\n' });
+    assert.doesNotMatch(prompt, /プロジェクトの背景/);
+  });
+
   it('これまでのレビューがあれば、行へのコメントとあわせて載せる', () => {
     const prompt = buildReviewPrompt({
       request: createRequest({
