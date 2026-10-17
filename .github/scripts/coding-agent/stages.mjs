@@ -183,6 +183,20 @@ export function artifactPath(stage, featureDir) {
   return artifact === null ? null : `${featureDir}/${artifact}`;
 }
 
+/** 受け入れ基準のファイルの名前 (機能ごとのディレクトリの中。仕様の 10.2) */
+export const ACCEPTANCE_CRITERIA_FILE = 'acceptance-criteria.json';
+
+/**
+ * 機能ごとのディレクトリから、受け入れ基準のファイルのパスを返す。
+ * 受け入れ基準のファイルは、仕様書の段階で、エージェントの出力から仕組みが作る (acceptance-criteria.mjs)
+ *
+ * @param {string} featureDir 機能ごとのディレクトリ
+ * @returns {string}
+ */
+export function acceptanceCriteriaPath(featureDir) {
+  return `${featureDir}/${ACCEPTANCE_CRITERIA_FILE}`;
+}
+
 /**
  * 段階の Issue の本文を作る。
  *

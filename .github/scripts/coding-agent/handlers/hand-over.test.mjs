@@ -97,6 +97,16 @@ describe('handOver.run', () => {
     assert.match(comment?.body ?? '', /@alice .*`force` を指定して手動実行/);
   });
 
+  it('受け入れ基準を作れなかったときも、同じように引き継ぎ、理由をコメントする', async () => {
+    const { fake, task } = setup();
+
+    await run(fake, dispatchContext({ 'issue-number': String(task.number), 'hand-over': 'acceptance-criteria', 'source-run-id': '123' }));
+
+    assert.ok(fake.issues.get(task.number)?.labels.some((label) => label.name === 'needs-human'));
+    const comment = fake.comments.find((candidate) => candidate.issue_number === task.number);
+    assert.match(comment?.body ?? '', /受け入れ基準のファイルを作れませんでした/);
+  });
+
   it('修正のときは、PR に needs-human を付けて引き継ぐ', async () => {
     const { fake } = setup();
 

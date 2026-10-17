@@ -6,7 +6,7 @@
       "allow": ["{featureDir}/requirements.md"]
     },
     "specification": {
-      "allow": ["{featureDir}/specification.md"]
+      "allow": ["{featureDir}/specification.md", "{featureDir}/acceptance-criteria.json"]
     },
     "domain-model": {
       "allow": ["{featureDir}/domain-model.md"]

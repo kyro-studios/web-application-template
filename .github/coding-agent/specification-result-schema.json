@@ -1,0 +1,47 @@
+{
+  "type": "object",
+  "properties": {
+    "commit_message": {
+      "type": "string",
+      "description": "Conventional Commits 形式のコミットメッセージ。1 行目は `<type>: <概要>` とし、PR のタイトルにも使う"
+    },
+    "pull_request_body": {
+      "type": "string",
+      "description": "PR の説明 (Markdown)。変更内容の要約と、確認した内容や残っている課題を書く"
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "description": "この機能の受け入れ基準のすべて。今ある基準を残すときは、渡された識別子を付ける",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": ["string", "null"],
+            "description": "今ある基準を残すときは、渡された識別子 (例: AC12-3)。新しい基準は null"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["api", "screen"],
+            "description": "api (API を外から確かめる) か screen (画面を操作して確かめる)"
+          },
+          "behavior": {
+            "type": "string",
+            "description": "確かめる振る舞い (前提と操作)"
+          },
+          "expected": {
+            "type": "string",
+            "description": "期待する結果。外から確かめられる形で書く"
+          },
+          "spec_reference": {
+            "type": "string",
+            "description": "仕様書の該当箇所 (見出し)"
+          }
+        },
+        "required": ["id", "kind", "behavior", "expected", "spec_reference"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["commit_message", "pull_request_body", "acceptance_criteria"],
+  "additionalProperties": false
+}
