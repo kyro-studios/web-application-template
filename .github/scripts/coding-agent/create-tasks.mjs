@@ -6,6 +6,9 @@
  * 2. Blocked by の関係を設定する
  * 3. 最後に担当のラベル (agent:<識別子>) を付ける (ここで、依存先の無いタスクが起動する)
  *
+ * 受け入れ基準のファイルがある機能では、計画の割り当てを検証し、各 Issue の本文に、割り当てた受け入れ基準の内容と
+ * 割り当ての印を書く (仕様の 10.4)。受け入れ基準のファイルは、API で既定ブランチの最新のものを読む。
+ *
  * 本文に埋め込んだ印 (実行の ID とタスクの key) で作成済みの Issue を見分けるため、
  * 途中で失敗しても、同じ実行を再実行すれば続きから処理する。
  *
@@ -19,10 +22,12 @@
  */
 
 import { readFile } from 'node:fs/promises';
-import { agentLabel, ConfigError, getAgent, getImplementers, isCoordinator, loadConfig } from './config.mjs';
-import { addBlockedBy, addSubIssue, ensureAgentLabels, getBlockedBy, listSubIssues, measureIssueDepth } from './github-issues.mjs';
+import { assignmentSection, fetchCriteriaFile } from './acceptance-criteria.mjs';
+import { agentLabel, ConfigError, featureDirectory, getAgent, getImplementers, isCoordinator, isValidFeatureName, loadConfig } from './config.mjs';
+import { addBlockedBy, addSubIssue, ensureAgentLabels, findLabeledAncestor, getBlockedBy, listSubIssues, measureIssueDepth } from './github-issues.mjs';
+import { FEATURE_NAME_FIELD, parseIssueForm } from './issue-form.mjs';
 import { MAX_SUB_ISSUE_LEVELS, MAX_SUB_ISSUES, measureDepth, validatePlan } from './plan-validation.mjs';
-import { IMPLEMENTATION_STAGE, stageLabel, stageOf } from './stages.mjs';
+import { FEATURE_LABEL, IMPLEMENTATION_STAGE, stageLabel, stageOf } from './stages.mjs';
 
 /**
  * actions/github-script がスクリプトに渡す引数
@@ -127,13 +132,32 @@ export default async function createTasks({ github, context, core, writeInterval
   await collect(subIssues);
   const otherRoots = subIssues.filter((issue) => parseTaskMarker(/** @type {RestIssue & { body?: string }} */ (issue).body, runId) === undefined).length;
 
-  const planningDepth = await measureIssueDepth(github, repository, planningNumber);
-  const errors = validatePlan(input, {
-    agents: new Set(getImplementers(config.agents).map((implementer) => implementer.agent.id)),
-    maxTasks,
-    maxDepth: MAX_SUB_ISSUE_LEVELS - planningDepth,
-    rootCapacity: MAX_SUB_ISSUES - otherRoots,
+  // 機能の受け入れ基準を、既定ブランチの最新のファイルから読む (仕様の 10.4)
+  const feature = await findLabeledAncestor(github, repository, planningNumber, FEATURE_LABEL);
+  const featureName = feature === undefined ? '' : (parseIssueForm(feature.body).get(FEATURE_NAME_FIELD) ?? '');
+  if (feature === undefined || !isValidFeatureName(featureName)) {
+    core.setFailed(`#${planningNumber} の機能の親 Issue か、その機能名が見つかりません`);
+    return;
+  }
+  const criteria = await fetchCriteriaFile({
+    github,
+    repository,
+    ref: /** @type {string} */ (context.payload.repository?.default_branch),
+    featureDir: featureDirectory(config.stages, feature.number, featureName),
+    feature: feature.number,
   });
+
+  const planningDepth = await measureIssueDepth(github, repository, planningNumber);
+  const errors =
+    'errors' in criteria
+      ? ['受け入れ基準のファイルが形式を満たしていません', ...criteria.errors]
+      : validatePlan(input, {
+          agents: new Set(getImplementers(config.agents).map((implementer) => implementer.agent.id)),
+          maxTasks,
+          maxDepth: MAX_SUB_ISSUE_LEVELS - planningDepth,
+          rootCapacity: MAX_SUB_ISSUES - otherRoots,
+          criteria: criteria.file === null ? null : criteria.file.criteria.map((criterion) => criterion.id),
+        });
   if (errors.length > 0) {
     await github.rest.issues.createComment({
       ...repository,
@@ -151,6 +175,7 @@ export default async function createTasks({ github, context, core, writeInterval
   }
   const plan = /** @type {Plan} */ (input);
   const byKey = new Map(plan.tasks.map((task) => [task.key, task]));
+  const criteriaFile = 'file' in criteria ? criteria.file : null;
 
   // 1. 親タスクから順に Issue を作成し、Sub Issue にする
   const ordered = [...plan.tasks].sort((a, b) => (measureDepth(a, byKey) ?? 0) - (measureDepth(b, byKey) ?? 0));
@@ -163,7 +188,8 @@ export default async function createTasks({ github, context, core, writeInterval
     const { data } = await github.rest.issues.create({
       ...repository,
       title: task.title,
-      body: `${task.body.trim()}\n\n---\n🤖 #${planningNumber} の実装計画から作成しました ([ワークフロー](${runUrl}))。\n\n${taskMarker(runId, task.key)}\n`,
+      // 受け入れ基準のファイルがある機能では、割り当てた基準の内容と割り当ての印を書く (割り当てが無いタスクにも、識別子の無い印を書く)
+      body: `${task.body.trim()}\n\n${criteriaFile === null ? '' : `${assignmentSection(task.acceptance_criteria, criteriaFile)}\n\n`}---\n🤖 #${planningNumber} の実装計画から作成しました ([ワークフロー](${runUrl}))。\n\n${taskMarker(runId, task.key)}\n`,
       labels: [stageLabel(IMPLEMENTATION_STAGE)],
     });
     const issue = /** @type {RestIssue} */ (data);

@@ -11,6 +11,7 @@
  * @property {string | null} agent 担当エージェントの識別子 (人が対応するタスクなら null)
  * @property {string | null} parent 親タスクの key (実装計画の Issue の直下なら null)
  * @property {string[]} blocked_by 先に完了している必要があるタスクの key
+ * @property {string[]} acceptance_criteria このタスクで受け入れテストを書いて通す、受け入れ基準の識別子 (仕様の 10.4)
  */
 
 /**
@@ -25,6 +26,7 @@
  * @property {number} maxTasks 1 回の計画で作成できるタスクの上限
  * @property {number} maxDepth 実装計画の Issue の直下を 1 階層目とした、親子関係の深さの上限
  * @property {number} rootCapacity 実装計画の Issue の直下に追加できる Sub Issue の数
+ * @property {readonly string[] | null} criteria 機能の受け入れ基準の識別子 (受け入れ基準のファイルが無い機能では null)
  */
 
 export const TASK_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{0,49}$/;
@@ -45,7 +47,7 @@ const MARKER_PREFIX = '<!-- coding-agent';
 export const MAX_SUB_ISSUES = 100;
 
 const PLAN_FIELDS = ['summary', 'tasks'];
-const TASK_FIELDS = ['key', 'title', 'body', 'agent', 'parent', 'blocked_by'];
+const TASK_FIELDS = ['key', 'title', 'body', 'agent', 'parent', 'blocked_by', 'acceptance_criteria'];
 
 /**
  * 計画を検証し、問題点の一覧を返す。空なら計画をそのまま適用できる。
@@ -88,7 +90,51 @@ export function validatePlan(input, options) {
   return [
     ...validateHierarchy(tasks, options.maxDepth, options.rootCapacity),
     ...findDeadlocks(tasks),
+    ...validateAssignments(tasks, options.criteria),
   ];
+}
+
+/**
+ * 受け入れ基準の割り当てを確かめる (仕様の 10.4)。
+ * - 受け入れ基準のファイルがある機能では、すべての基準が、ちょうど 1 つのタスクに割り当てられている
+ * - ファイルに無い識別子を割り当てていない。担当が人 (null) のタスクには割り当てていない
+ * - 受け入れ基準のファイルが無い機能 (新しい流れを入れる前に始めた機能) では、どのタスクにも割り当てていない
+ *
+ * @param {PlanTask[]} tasks
+ * @param {readonly string[] | null} criteria
+ * @returns {string[]}
+ */
+export function validateAssignments(tasks, criteria) {
+  if (criteria === null) {
+    return tasks
+      .filter((task) => task.acceptance_criteria.length > 0)
+      .map((task) => `タスク "${task.key}" に受け入れ基準を割り当てていますが、この機能には受け入れ基準のファイルがありません`);
+  }
+  /** @type {string[]} */
+  const errors = [];
+  const known = new Set(criteria);
+  /** @type {Map<string, string[]>} */
+  const assigned = new Map();
+  for (const task of tasks) {
+    if (task.agent === null && task.acceptance_criteria.length > 0) {
+      errors.push(`タスク "${task.key}" は担当が人 (agent が null) のため、受け入れ基準を割り当てられません`);
+    }
+    for (const id of task.acceptance_criteria) {
+      if (!known.has(id)) {
+        errors.push(`タスク "${task.key}" に割り当てた ${id} は、受け入れ基準にありません`);
+      }
+      assigned.set(id, [...(assigned.get(id) ?? []), task.key]);
+    }
+  }
+  for (const id of criteria) {
+    const keys = assigned.get(id) ?? [];
+    if (keys.length === 0) {
+      errors.push(`受け入れ基準 ${id} が、どのタスクにも割り当てられていません`);
+    } else if (keys.length > 1) {
+      errors.push(`受け入れ基準 ${id} が、複数のタスク (${keys.join('、')}) に割り当てられています`);
+    }
+  }
+  return errors;
 }
 
 /**
@@ -147,6 +193,12 @@ function validateTaskFields(task, index, agents) {
 
   if (task.parent !== null && typeof task.parent !== 'string') {
     errors.push(`${label}.parent は文字列または null にしてください`);
+  }
+
+  if (!Array.isArray(task.acceptance_criteria) || !task.acceptance_criteria.every((id) => typeof id === 'string')) {
+    errors.push(`${label}.acceptance_criteria は文字列の配列にしてください`);
+  } else if (new Set(task.acceptance_criteria).size !== task.acceptance_criteria.length) {
+    errors.push(`${label}.acceptance_criteria に同じ識別子が重複しています`);
   }
 
   if (!Array.isArray(task.blocked_by) || !task.blocked_by.every((key) => typeof key === 'string')) {
