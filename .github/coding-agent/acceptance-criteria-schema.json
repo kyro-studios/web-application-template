@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "受け入れ基準 (docs/features/<機能>/acceptance-criteria.json)",
+  "description": "仕様書の段階で、エージェントの出力から仕組みが作る (仕様の 10.2)。人が直すときも、この形式に従う",
+  "type": "object",
+  "properties": {
+    "feature": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "機能の親 Issue の番号"
+    },
+    "next_number": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "次に振る連番。消えた基準の番号を使い回さないため、ファイルに持つ"
+    },
+    "criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^AC[1-9][0-9]*-[1-9][0-9]*$",
+            "description": "AC<機能の親 Issue の番号>-<連番>"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["api", "screen"]
+          },
+          "behavior": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expected": {
+            "type": "string",
+            "minLength": 1
+          },
+          "spec_reference": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["id", "kind", "behavior", "expected", "spec_reference"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["feature", "next_number", "criteria"],
+  "additionalProperties": false
+}
