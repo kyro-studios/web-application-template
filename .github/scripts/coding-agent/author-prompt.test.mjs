@@ -168,9 +168,72 @@ describe('buildFixPrompt (コンフリクト)', () => {
   });
 });
 
+describe('今の受け入れ基準 (仕様書の段階)', () => {
+  const criteria = [{ id: 'AC1-1', kind: /** @type {const} */ ('api'), behavior: 'ログインする', expected: '200 を返す', spec_reference: '2.1' }];
+  const fixMaterials = {
+    ...materials,
+    pullRequest: { number: 8, title: 'docs: 仕様書を追加する', body: 'Closes #3', headRef: 'coding-agent/claude/issue-3-1' },
+    review: { id: 1, body: '所見', comments: [] },
+    fixRound: 1,
+    maxFixRounds: 3,
+  };
+
+  it('作成では、今の受け入れ基準が無いことを伝え、識別子を null にさせる', () => {
+    const prompt = buildCreatePrompt({
+      prompts: ['共通の指示', '文書の指示', '仕様書の指示', '受け入れ基準の出力の指示'],
+      acceptanceCriteria: null,
+      request: { ...baseRequest, mode: 'create', pullRequestNumber: null, materials },
+    });
+    assert.match(prompt, /仕様書の指示\n\n受け入れ基準の出力の指示\n\n## 依頼の内容/);
+    assert.match(prompt, /### 今の受け入れ基準\n\nまだありません。すべての基準の `id` を `null` にしてください。\n\n### Issue の本文/);
+  });
+
+  it('修正では、今の受け入れ基準を識別子付きで渡し、受け入れ基準の出力の指示を加える', () => {
+    const prompt = buildFixPrompt({
+      prompts: ['修正の指示', '仕様書の指示', '受け入れ基準の出力の指示'],
+      acceptanceCriteria: criteria,
+      request: { ...baseRequest, id: 'fix-pr-8-0123456', mode: 'fix', pullRequestNumber: 8, materials: { ...fixMaterials, conflict: null } },
+    });
+    assert.match(prompt, /^修正の指示\n\n受け入れ基準の出力の指示\n\n## 参考: この段階の成果物に求められること\n\n仕様書の指示/);
+    assert.match(prompt, /### 今の受け入れ基準\n\n~~~text\n\[\n {2}\{\n {4}"id": "AC1-1",/);
+  });
+
+  it('コンフリクトの修正では、解消の指示の後に、受け入れ基準の出力の指示を加える', () => {
+    const prompt = buildFixPrompt({
+      prompts: ['修正の指示', '仕様書の指示', 'コンフリクトの指示', '受け入れ基準の出力の指示'],
+      acceptanceCriteria: criteria,
+      request: {
+        ...baseRequest,
+        id: 'fix-pr-8-0123456',
+        mode: 'fix',
+        pullRequestNumber: 8,
+        materials: { ...fixMaterials, review: null, conflict: { baseSha: '0123456789abcdef0123456789abcdef01234567', files: [] } },
+      },
+    });
+    assert.match(prompt, /^修正の指示\n\nコンフリクトの指示\n\n受け入れ基準の出力の指示\n\n## 参考/);
+  });
+
+  it('仕様書の段階でなければ、今の受け入れ基準の節を加えない', () => {
+    const prompt = buildCreatePrompt({
+      prompts: ['共通の指示'],
+      request: { ...baseRequest, mode: 'create', stage: 'domain-model', pullRequestNumber: null, materials },
+    });
+    assert.doesNotMatch(prompt, /今の受け入れ基準/);
+  });
+});
+
 describe('promptFiles', () => {
   it('依頼の種類と段階の種類ごとに、読み込む指示のファイルを決める', () => {
-    assert.deepEqual(promptFiles('create', 'specification'), ['create/common.md', 'create/documents.md', 'create/specification.md']);
+    // 仕様書の段階では、作成と修正のどちらでも、受け入れ基準の出力の指示を最後に加える
+    assert.deepEqual(promptFiles('create', 'specification'), ['create/common.md', 'create/documents.md', 'create/specification.md', 'create/specification-output.md']);
+    assert.deepEqual(promptFiles('fix', 'specification'), ['fix/common.md', 'create/specification.md', 'create/specification-output.md']);
+    assert.deepEqual(promptFiles('fix', 'specification', { conflict: true }), [
+      'fix/common.md',
+      'create/specification.md',
+      'fix/conflict.md',
+      'create/specification-output.md',
+    ]);
+    assert.deepEqual(promptFiles('create', 'domain-model'), ['create/common.md', 'create/documents.md', 'create/domain-model.md']);
     assert.deepEqual(promptFiles('create', 'planning'), ['create/common.md', 'create/planning.md']);
     assert.deepEqual(promptFiles('create', 'implementation'), ['create/common.md', 'create/implementation.md', 'create/implementation-output.md']);
     assert.deepEqual(promptFiles('create', 'project'), ['create/common.md', 'create/code.md', 'create/project.md', 'create/project-output.md']);

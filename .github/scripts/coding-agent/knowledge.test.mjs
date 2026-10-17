@@ -8,6 +8,7 @@ import { FEATURE_STAGES, IMPLEMENTATION_STAGE } from './stages.mjs';
 describe('段階に渡す知識', () => {
   it('仕様の 6.5 の表のとおりに、段階ごとに知識を割り当てる', () => {
     assert.deepEqual(STAGE_KNOWLEDGE, {
+      specification: ['acceptance-criteria'],
       architecture: ['tech-stacks', 'architecture-documents'],
       project: ['project', 'architecture-rules'],
       implementation: ['implementation'],
@@ -30,7 +31,7 @@ describe('段階に渡す知識', () => {
   });
 
   it('割り当ての無い段階には、知識を渡さない', async () => {
-    assert.deepEqual(knowledgeFor('specification'), []);
+    assert.deepEqual(knowledgeFor('domain-model'), []);
     assert.deepEqual(knowledgeFor('toString'), []);
     assert.deepEqual(await readKnowledge('planning'), []);
   });

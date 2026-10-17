@@ -15,7 +15,7 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { readKnowledge } from './knowledge.mjs';
 import { fence, knowledgeLines, stageName } from './prompt-format.mjs';
-import { IMPLEMENTATION_STAGE } from './stages.mjs';
+import { acceptanceCriteriaPath, IMPLEMENTATION_STAGE } from './stages.mjs';
 
 /**
  * 作成の依頼の資料 (handlers/launch-stage.mjs が作る)
@@ -48,6 +48,11 @@ import { IMPLEMENTATION_STAGE } from './stages.mjs';
 const CODE_STAGES = ['project'];
 
 /**
+ * 受け入れ基準を出力する段階 (仕様の 10.2)。作成と修正のどちらでも、受け入れ基準の出力の指示を加え、今の受け入れ基準を渡す
+ */
+const ACCEPTANCE_CRITERIA_STAGE = 'specification';
+
+/**
  * 依頼の種類と段階に応じて、読み込む指示のファイル (prompts/ からの相対パス) を返す。
  * - 作成: 共通の指示に、段階の種類ごとの指示を続ける。文書の段階は、文書に共通する指示と段階ごとの指示を続ける。
  *   プロジェクトの作成は、コードを変える段階に共通する指示と段階ごとの指示と、作成のときの出力の指示を続ける。
@@ -55,6 +60,7 @@ const CODE_STAGES = ['project'];
  * - どちらも、最後に段階に渡す知識 (knowledge.mjs) を加える。知識はここでは返さず、readKnowledge で読む
  * - 修正: 修正に共通する指示に、段階ごとの作成の指示を参考として続ける。出力の指示は修正に共通する指示にあるため、
  *   作成のときの出力の指示は含めない。コンフリクトの修正では、コンフリクトの解消の指示を加える
+ * - 仕様書の段階では、作成と修正のどちらでも、最後に受け入れ基準の出力の指示 (specification-output.md) を加える
  *
  * @param {'create' | 'fix'} mode
  * @param {string} stage
@@ -62,8 +68,9 @@ const CODE_STAGES = ['project'];
  * @returns {string[]}
  */
 export function promptFiles(mode, stage, { conflict = false } = {}) {
+  const criteriaOutput = stage === ACCEPTANCE_CRITERIA_STAGE ? ['create/specification-output.md'] : [];
   if (mode === 'fix') {
-    return ['fix/common.md', `create/${stage}.md`, ...(conflict ? ['fix/conflict.md'] : [])];
+    return ['fix/common.md', `create/${stage}.md`, ...(conflict ? ['fix/conflict.md'] : []), ...criteriaOutput];
   }
   if (stage === 'planning') {
     return ['create/common.md', 'create/planning.md'];
@@ -74,7 +81,23 @@ export function promptFiles(mode, stage, { conflict = false } = {}) {
   if (CODE_STAGES.includes(stage)) {
     return ['create/common.md', 'create/code.md', `create/${stage}.md`, `create/${stage}-output.md`];
   }
-  return ['create/common.md', 'create/documents.md', `create/${stage}.md`];
+  return ['create/common.md', 'create/documents.md', `create/${stage}.md`, ...criteriaOutput];
+}
+
+/**
+ * 今の受け入れ基準を、識別子付きで組み立てる (仕様書の段階のみ)。
+ *
+ * @param {import('./acceptance-criteria.mjs').Criterion[] | null | undefined} criteria 今の受け入れ基準 (無ければ null。仕様書の段階でなければ undefined)
+ * @returns {string[]}
+ */
+function criteriaLines(criteria) {
+  if (criteria === undefined) {
+    return [];
+  }
+  if (criteria === null || criteria.length === 0) {
+    return ['', '### 今の受け入れ基準', '', 'まだありません。すべての基準の `id` を `null` にしてください。'];
+  }
+  return ['', '### 今の受け入れ基準', '', fence(JSON.stringify(criteria, null, 2))];
 }
 
 /**
@@ -141,15 +164,17 @@ function issueBodyLines({ issue, feature }) {
  * @param {import('./agent-request.mjs').AgentRequest & { materials: CreateMaterials }} args.request
  * @param {string[]} args.prompts 指示のファイルの本文 (promptFiles の順)
  * @param {{ name: string, body: string }[]} [args.knowledge] 段階に渡す知識 (readKnowledge で読んだもの)
+ * @param {import('./acceptance-criteria.mjs').Criterion[] | null} [args.acceptanceCriteria] 今の受け入れ基準 (仕様書の段階のみ。無ければ null)
  * @returns {string}
  */
-export function buildCreatePrompt({ request, prompts, knowledge = [] }) {
+export function buildCreatePrompt({ request, prompts, knowledge = [], acceptanceCriteria }) {
   const lines = [
     ...prompts.flatMap((prompt) => [prompt.trim(), '']),
     ...knowledgeLines(knowledge),
     '## 依頼の内容',
     '',
     ...requestLines(request),
+    ...criteriaLines(acceptanceCriteria),
     ...issueBodyLines(request.materials),
   ];
   return `${lines.join('\n')}\n`;
@@ -160,17 +185,24 @@ export function buildCreatePrompt({ request, prompts, knowledge = [] }) {
  *
  * @param {object} args
  * @param {import('./agent-request.mjs').AgentRequest & { materials: FixMaterials }} args.request
- * @param {string[]} args.prompts 指示のファイルの本文 (promptFiles の順。修正に共通する指示と、段階ごとの作成の指示)
+ * @param {string[]} args.prompts 指示のファイルの本文 (promptFiles の順。修正に共通する指示、段階ごとの作成の指示、
+ *   コンフリクトの解消の指示 (コンフリクトの修正のみ)、受け入れ基準の出力の指示 (仕様書の段階のみ))
  * @param {{ name: string, body: string }[]} [args.knowledge] 段階に渡す知識 (readKnowledge で読んだもの)
+ * @param {import('./acceptance-criteria.mjs').Criterion[] | null} [args.acceptanceCriteria] 今の受け入れ基準 (仕様書の段階のみ。無ければ null)
  * @returns {string}
  */
-export function buildFixPrompt({ request, prompts, knowledge = [] }) {
-  const [common, stagePrompt, conflictPrompt] = prompts;
+export function buildFixPrompt({ request, prompts, knowledge = [], acceptanceCriteria }) {
+  const [common, stagePrompt, ...rest] = prompts;
   const { pullRequest, review, conflict, fixRound, maxFixRounds } = request.materials;
+  const conflictPrompt = conflict ? rest.shift() : undefined;
+  const criteriaOutputPrompt = request.stage === ACCEPTANCE_CRITERIA_STAGE ? rest.shift() : undefined;
   const reasons = [...(review ? ['レビューの指摘'] : []), ...(conflict ? ['既定ブランチとのコンフリクト'] : [])];
   const lines = [common.trim(), ''];
   if (conflict && conflictPrompt !== undefined) {
     lines.push(conflictPrompt.trim(), '');
+  }
+  if (criteriaOutputPrompt !== undefined) {
+    lines.push(criteriaOutputPrompt.trim(), '');
   }
   lines.push(
     '## 参考: この段階の成果物に求められること',
@@ -184,6 +216,7 @@ export function buildFixPrompt({ request, prompts, knowledge = [] }) {
     `- 修正の理由: ${reasons.join('、')}`,
     `- 修正の回数: ${fixRound} 回目 (上限 ${maxFixRounds} 回)`,
     ...requestLines(request),
+    ...criteriaLines(acceptanceCriteria),
   );
   if (conflict) {
     const files = conflict.files ?? [];
@@ -201,6 +234,31 @@ export function buildFixPrompt({ request, prompts, knowledge = [] }) {
   }
   lines.push(...issueBodyLines(request.materials));
   return `${lines.join('\n')}\n`;
+}
+
+/**
+ * 作業ディレクトリ (作業を始めるコミットをチェックアウトしたもの) から、今の受け入れ基準を読む。ファイルが無ければ null を返す。
+ *
+ * @param {string} featureDir
+ * @returns {Promise<import('./acceptance-criteria.mjs').Criterion[] | null>}
+ */
+async function readCurrentCriteria(featureDir) {
+  const path = acceptanceCriteriaPath(featureDir);
+  /** @type {string} */
+  let text;
+  try {
+    text = await readFile(path, 'utf8');
+  } catch (error) {
+    if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT') {
+      return null;
+    }
+    throw error;
+  }
+  const criteria = JSON.parse(text)?.criteria;
+  if (!Array.isArray(criteria)) {
+    throw new Error(`今の受け入れ基準 (${path}) に criteria がありません`);
+  }
+  return criteria;
 }
 
 /**
@@ -236,8 +294,9 @@ async function main(args) {
   const files = promptFiles(request.mode, request.stage, { conflict: Boolean(conflict) });
   const prompts = await Promise.all(files.map((file) => readFile(join(promptsDir, file), 'utf8')));
   const knowledge = await readKnowledge(request.stage);
+  const acceptanceCriteria = request.stage === ACCEPTANCE_CRITERIA_STAGE ? await readCurrentCriteria(request.materials.featureDir) : undefined;
   const build = request.mode === 'fix' ? buildFixPrompt : buildCreatePrompt;
-  await writeFile(/** @type {string} */ (values['prompt-out']), build({ request, prompts, knowledge }));
+  await writeFile(/** @type {string} */ (values['prompt-out']), build({ request, prompts, knowledge, acceptanceCriteria }));
   console.log(request.mode === 'fix' ? '修正の指示を作成しました' : '作成の指示を作成しました');
 }
 
