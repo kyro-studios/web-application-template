@@ -15,8 +15,7 @@
       "allow": ["{featureDir}/architecture.md", "docs/architecture.md", "docs/api/openapi.yaml"]
     },
     "project": {
-      "allow": ["app/**", "architecture-rules/**", "acceptance/**", "scripts/test.sh", "scripts/test.Dockerfile"],
-      "deny": ["acceptance/tests/**"]
+      "allow": ["app/**", "architecture-rules/**", "scripts/test.sh", "scripts/start-app.sh", "scripts/test.Dockerfile"]
     },
     "implementation": {
       "allow": ["app/**"]
