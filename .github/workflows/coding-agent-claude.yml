@@ -165,6 +165,17 @@ jobs:
               echo "output-schema=$(jq -c . "$TRUSTED/.github/coding-agent/result-schema.json")" >> "$GITHUB_OUTPUT"
               ;;
           esac
+          # 実装タスクでは、割り当てられた受け入れ基準を、テストの機械的な実行の受け入れ基準の確認に渡す (仕様の 10.5)。
+          # 受け入れ基準のファイルが無い機能 (acceptanceCriteria が null) では、確認しない
+          if [ "$(jq -r '.stage' "$request")" = 'implementation' ] && [ "$(jq -r '.materials.acceptanceCriteria | type' "$request")" = 'array' ]; then
+            criteria="$(jq -r '.materials.acceptanceCriteria | join(" ")' "$request")"
+            if [[ ! "$criteria" =~ ^(AC[1-9][0-9]*-[1-9][0-9]*( |$))*$ ]]; then
+              echo "::error::割り当てられた受け入れ基準の識別子の形式が正しくありません: $criteria"
+              exit 1
+            fi
+            echo "acceptance-check=true" >> "$GITHUB_OUTPUT"
+            echo "acceptance-criteria=$criteria" >> "$GITHUB_OUTPUT"
+          fi
 
       # コンフリクトの修正では、既定ブランチのコミットを取り込み (コミットはしない)、コンフリクトの印をエージェントに解消させる
       - name: 既定ブランチを取り込む
@@ -312,6 +323,8 @@ jobs:
           TRUSTED: ${{ runner.temp }}/trusted
           # プロジェクトの作成では、scripts/test.sh が無ければ失敗にする (作らせるため)
           REQUIRE_TEST_SCRIPT: ${{ inputs.stage == 'project' }}
+          ACCEPTANCE_CHECK: ${{ steps.request.outputs.acceptance-check == 'true' }}
+          ACCEPTANCE_CRITERIA: ${{ steps.request.outputs.acceptance-criteria }}
         run: bash "$TRUSTED/.github/scripts/coding-agent/run-tests.sh" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/test-1.log"
 
       - name: テストの失敗を直させる指示を作る (1 回目)
@@ -366,6 +379,8 @@ jobs:
           TRUSTED: ${{ runner.temp }}/trusted
           # プロジェクトの作成では、scripts/test.sh が無ければ失敗にする (作らせるため)
           REQUIRE_TEST_SCRIPT: ${{ inputs.stage == 'project' }}
+          ACCEPTANCE_CHECK: ${{ steps.request.outputs.acceptance-check == 'true' }}
+          ACCEPTANCE_CRITERIA: ${{ steps.request.outputs.acceptance-criteria }}
         run: bash "$TRUSTED/.github/scripts/coding-agent/run-tests.sh" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/test-2.log"
 
       - name: テストの失敗を直させる指示を作る (2 回目)
@@ -420,6 +435,8 @@ jobs:
           TRUSTED: ${{ runner.temp }}/trusted
           # プロジェクトの作成では、scripts/test.sh が無ければ失敗にする (作らせるため)
           REQUIRE_TEST_SCRIPT: ${{ inputs.stage == 'project' }}
+          ACCEPTANCE_CHECK: ${{ steps.request.outputs.acceptance-check == 'true' }}
+          ACCEPTANCE_CRITERIA: ${{ steps.request.outputs.acceptance-criteria }}
         run: bash "$TRUSTED/.github/scripts/coding-agent/run-tests.sh" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/test-3.log"
 
       - name: テストの失敗を直させる指示を作る (3 回目)
@@ -474,6 +491,8 @@ jobs:
           TRUSTED: ${{ runner.temp }}/trusted
           # プロジェクトの作成では、scripts/test.sh が無ければ失敗にする (作らせるため)
           REQUIRE_TEST_SCRIPT: ${{ inputs.stage == 'project' }}
+          ACCEPTANCE_CHECK: ${{ steps.request.outputs.acceptance-check == 'true' }}
+          ACCEPTANCE_CRITERIA: ${{ steps.request.outputs.acceptance-criteria }}
         run: bash "$TRUSTED/.github/scripts/coding-agent/run-tests.sh" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/test-4.log"
 
       - name: テストの結果をまとめる

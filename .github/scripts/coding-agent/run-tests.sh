@@ -12,6 +12,8 @@
 #   (REQUIRE_TEST_SCRIPT が true なら、失敗にする)
 # - acceptance/tests/ にテストのファイルが無ければ、仕組みが持つ起動の確認 (smoke) だけを実行する
 # - 環境変数 ACCEPTANCE_REPORT を指定すると、受け入れテストの JSON のレポートを、そのパスに書き出す
+# - 環境変数 ACCEPTANCE_CHECK が true (実装タスク) なら、テストが通った後に、受け入れ基準の確認 (check-acceptance.mjs) を行う。
+#   割り当てた識別子は、環境変数 ACCEPTANCE_CRITERIA に空白で区切って渡す
 # - リポジトリを一時的なディレクトリにコピーしてから実行する。テストの出力物 (node_modules やビルドの結果) が、
 #   エージェントの変更に混ざらないようにするため
 # - コンテナには、ジョブの環境変数を渡さない (秘密の値をテストのコードから読めないようにするため)。
@@ -85,6 +87,16 @@ status="${PIPESTATUS[0]}"
 report="$work_dir/acceptance/reports/acceptance-report.json"
 if [ -n "${ACCEPTANCE_REPORT:-}" ] && [ -f "$report" ]; then
   cp "$report" "$ACCEPTANCE_REPORT"
+fi
+
+# 実装タスクでは、テストが通った後に、受け入れ基準の確認を行う (仕様の 10.5)。満たさなければ、テストの失敗として扱う。
+# 満たさなかった内容はログの最後に書き、直させる指示に渡るようにする
+if [ "${ACCEPTANCE_CHECK:-false}" = 'true' ] && [ "$status" -eq 0 ]; then
+  {
+    echo "== 受け入れ基準を確かめる =="
+    node "$(dirname "$0")/check-acceptance.mjs" --criteria "${ACCEPTANCE_CRITERIA:-}" --report "$report"
+  } 2>&1 | tee -a "$log_file"
+  status="${PIPESTATUS[0]}"
 fi
 
 docker image rm "$image" > /dev/null 2>&1 || true
