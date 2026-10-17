@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { buildTestFixPrompt, DEFAULT_TEST_FIX_ATTEMPTS, logTail, MAX_TEST_FIX_ATTEMPTS, maxTestFixAttempts } from './test-fix-prompt.mjs';
 
 describe('maxTestFixAttempts', () => {
@@ -14,6 +16,17 @@ describe('maxTestFixAttempts', () => {
     assert.equal(maxTestFixAttempts(''), 2);
     assert.equal(maxTestFixAttempts('-1'), 2);
     assert.equal(maxTestFixAttempts('1.5'), 2);
+  });
+
+  it('コマンドとして実行すると、Variables の値から決めた上限を出力する (作成担当のワークフローと同じ呼び出し方)', async () => {
+    const script = fileURLToPath(new URL('./test-fix-prompt.mjs', import.meta.url));
+    const run = (/** @type {string | undefined} */ value) =>
+      execFileSync(process.execPath, [script, '--print-max-attempts'], { encoding: 'utf8', env: { ...process.env, TEST_MAX_FIX_ATTEMPTS: value ?? '' } }).trim();
+    assert.equal(run('3'), '3');
+    assert.equal(run(''), String(DEFAULT_TEST_FIX_ATTEMPTS));
+
+    const workflow = await readFile(new URL('../../workflows/coding-agent-claude.yml', import.meta.url), 'utf8');
+    assert.ok(workflow.includes('max="$(node "$TRUSTED/.github/scripts/coding-agent/test-fix-prompt.mjs" --print-max-attempts)"'));
   });
 
   it('作成担当のワークフローに、テストの実行と直させるステップを、最大の回数まで並べている', async () => {

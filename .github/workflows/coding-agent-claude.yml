@@ -291,7 +291,7 @@ jobs:
             echo "変更が無いため、テストを実行しません"
             exit 0
           fi
-          max="$(node --input-type=module -e 'const { maxTestFixAttempts } = await import(process.argv[1]); console.log(maxTestFixAttempts(process.env.TEST_MAX_FIX_ATTEMPTS));' "$TRUSTED/.github/scripts/coding-agent/test-fix-prompt.mjs")"
+          max="$(node "$TRUSTED/.github/scripts/coding-agent/test-fix-prompt.mjs" --print-max-attempts)"
           echo "run=true" >> "$GITHUB_OUTPUT"
           echo "max-attempts=$max" >> "$GITHUB_OUTPUT"
           echo "テストが失敗したときに直させる回数の上限: $max 回"

@@ -7,6 +7,8 @@
  * 使い方 (作成担当のワークフローから実行する):
  *   node test-fix-prompt.mjs --prompt <最初の指示> --prompts <指示のディレクトリ> --log <失敗したログ>
  *     --previous <前回の出力の JSON> --attempt <何回目か> --max-attempts <上限> --prompt-out <指示の出力先>
+ *   node test-fix-prompt.mjs --print-max-attempts
+ *     直させる回数の上限を、環境変数 TEST_MAX_FIX_ATTEMPTS (Variables の値) から決めて出力する
  */
 
 import { readFile, writeFile } from 'node:fs/promises';
@@ -100,9 +102,14 @@ async function main(args) {
       attempt: { type: 'string' },
       'max-attempts': { type: 'string' },
       'prompt-out': { type: 'string' },
+      'print-max-attempts': { type: 'boolean' },
     },
     strict: true,
   });
+  if (values['print-max-attempts']) {
+    console.log(maxTestFixAttempts(process.env.TEST_MAX_FIX_ATTEMPTS));
+    return;
+  }
   for (const name of /** @type {const} */ (['prompt', 'prompts', 'log', 'previous', 'attempt', 'max-attempts', 'prompt-out'])) {
     if (values[name] === undefined) {
       throw new Error(`--${name} を指定してください`);
