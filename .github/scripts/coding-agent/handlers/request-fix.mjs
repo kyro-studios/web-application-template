@@ -20,12 +20,14 @@
  * コンフリクトの修正も、修正の回数に数える。
  */
 
+import { fetchCriteriaFile, readAssignment } from '../acceptance-criteria.mjs';
 import { isTrustedActor } from '../actors.mjs';
 import { findAgentByBot, fixExecution, getReviewer, isCoordinator } from '../config.mjs';
 import { getMergeableState, listReviewsBy } from '../github-pulls.mjs';
 import { CONFLICTING_STATE, mergeableStateOptions } from './detect-conflicts.mjs';
 import { NEEDS_HUMAN_LABEL, resolveStageContext, unhandledReason } from '../stage-context.mjs';
 import { isHandOverRequested } from './hand-over.mjs';
+import { IMPLEMENTATION_STAGE } from '../stages.mjs';
 
 /**
  * @typedef {import('../route.mjs').Handler} Handler
@@ -198,6 +200,24 @@ export const requestFix = {
       return {};
     }
 
+    // 実装タスクの修正でも、テストの機械的な実行で受け入れ基準を確かめるため、割り当てた識別子を読む (仕様の 10.5)
+    /** @type {string[] | null} */
+    let acceptanceCriteria = null;
+    if (stage === IMPLEMENTATION_STAGE) {
+      const criteria = await fetchCriteriaFile({ github, repository, ref: pullRequest.head.sha, featureDir, feature: feature.number });
+      const assignment = 'errors' in criteria ? { reason: '受け入れ基準のファイルが形式を満たしていません' } : criteria.file === null ? { ids: null } : readAssignment(issue.body, criteria.file);
+      if ('reason' in assignment) {
+        await github.rest.issues.createComment({
+          ...repository,
+          issue_number: number,
+          body: `🤖 修正を依頼できませんでした。#${issue.number} の${assignment.reason}。\n\n直したら、振り分け用のワークフローを、この PR の番号を指定して手動実行してください。`,
+        });
+        core.warning(`#${number} は、受け入れ基準に問題があるため修正を依頼しません`);
+        return {};
+      }
+      acceptanceCriteria = assignment.ids;
+    }
+
     const reasons = [...(reviewToFix === undefined ? [] : ['レビューの指摘']), ...(conflict === undefined ? [] : ['既定ブランチとのコンフリクト'])];
     const markers = [
       ...(reviewToFix === undefined ? [] : [fixRequestMarker(reviewToFix.id)]),
@@ -230,6 +250,8 @@ export const requestFix = {
             sharedArtifacts,
             documents,
             allowedFiles,
+            // 受け入れ基準の識別子 (実装タスクで、受け入れ基準のファイルがある機能のみ。それ以外は null)
+            acceptanceCriteria,
             review: reviewToFix === undefined ? null : { id: reviewToFix.id, body: reviewToFix.body, comments: reviewToFix.comments },
             conflict: conflict ?? null,
             fixRound: rounds + 1,
