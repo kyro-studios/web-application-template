@@ -8,8 +8,9 @@ import { FEATURE_STAGES, IMPLEMENTATION_STAGE } from './stages.mjs';
 describe('段階に渡す知識', () => {
   it('仕様の 6.5 の表のとおりに、段階ごとに知識を割り当てる', () => {
     assert.deepEqual(STAGE_KNOWLEDGE, {
-      specification: ['acceptance-criteria'],
-      architecture: ['tech-stacks', 'architecture-documents'],
+      requirements: ['scope'],
+      specification: ['scope', 'acceptance-criteria'],
+      architecture: ['scope', 'tech-stacks', 'architecture-documents'],
       project: ['project', 'architecture-rules'],
       implementation: ['implementation'],
     });
@@ -40,7 +41,7 @@ describe('段階に渡す知識', () => {
     const knowledge = await readKnowledge('architecture');
     assert.deepEqual(
       knowledge.map((item) => item.name),
-      ['既定の技術スタック', '全体の構成と API の契約の書き方'],
+      ['スコープの決め方', '既定の技術スタック', '全体の構成と API の契約の書き方'],
     );
     assert.ok(knowledge.every((item) => item.body.trim().length > 0));
   });

@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
- * @typedef {'acceptance-criteria' | 'tech-stacks' | 'architecture-documents' | 'project' | 'architecture-rules' | 'implementation'} KnowledgeId
+ * @typedef {'scope' | 'acceptance-criteria' | 'tech-stacks' | 'architecture-documents' | 'project' | 'architecture-rules' | 'implementation'} KnowledgeId
  */
 
 /**
@@ -24,6 +24,7 @@ export const KNOWLEDGE_ROOT = fileURLToPath(new URL('../../coding-agent/', impor
  * @type {Readonly<Record<KnowledgeId, { name: string, path: string }>>}
  */
 export const KNOWLEDGE = {
+  scope: { name: 'スコープの決め方', path: 'prompts/knowledge/scope.md' },
   'acceptance-criteria': { name: '受け入れ基準の書き方', path: 'prompts/knowledge/acceptance-criteria.md' },
   'tech-stacks': { name: '既定の技術スタック', path: 'tech-stacks.md' },
   'architecture-documents': { name: '全体の構成と API の契約の書き方', path: 'prompts/knowledge/architecture-documents.md' },
@@ -37,8 +38,9 @@ export const KNOWLEDGE = {
  * @type {Readonly<Record<string, readonly KnowledgeId[]>>}
  */
 export const STAGE_KNOWLEDGE = {
-  specification: ['acceptance-criteria'],
-  architecture: ['tech-stacks', 'architecture-documents'],
+  requirements: ['scope'],
+  specification: ['scope', 'acceptance-criteria'],
+  architecture: ['scope', 'tech-stacks', 'architecture-documents'],
   project: ['project', 'architecture-rules'],
   implementation: ['implementation'],
 };
