@@ -59,6 +59,7 @@ jobs:
       agent: ${{ steps.request.outputs.agent }}
       kind: ${{ steps.request.outputs.kind }}
       merge-sha: ${{ steps.request.outputs.merge-sha }}
+      criteria-failed: ${{ steps.criteria.outputs.failed }}
     steps:
       - name: 作業を始めるコミットをチェックアウトする
         uses: actions/checkout@v7
@@ -127,6 +128,13 @@ jobs:
               # コードを変える段階には、ネットワークや Docker を使える権限の設計が別に必要なため、まだ対応していない
               echo "::error::Codex によるコードを変える段階 (プロジェクトの作成と実装タスク) には、まだ対応していません (agents.json の roles.project.author と roles.implementation.implementers を見直してください)"
               exit 1
+              ;;
+            specification)
+              # 仕様書の段階では、作成と修正のどちらでも、受け入れ基準も出力する (仕様の 10.2)
+              echo "kind=change" >> "$GITHUB_OUTPUT"
+              echo "acceptance-criteria=true" >> "$GITHUB_OUTPUT"
+              echo "permission-profile=:workspace" >> "$GITHUB_OUTPUT"
+              echo "output-schema=$TRUSTED/.github/coding-agent/specification-result-schema.json" >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "kind=change" >> "$GITHUB_OUTPUT"
@@ -244,8 +252,29 @@ jobs:
             exit 1
           fi
 
+      # 仕様書の段階では、エージェントの出力から、受け入れ基準のファイルを作る (仕様の 10.2)。
+      # Schema での検証 (Ajv) に要るため、既定ブランチの仕組みの依存パッケージを、エージェントの作業の後にインストールする
+      - name: 受け入れ基準のファイルを作る
+        id: criteria
+        if: steps.request.outputs.acceptance-criteria == 'true'
+        env:
+          REQUEST_FILE: ${{ runner.temp }}/coding-agent-requests/${{ inputs.request-id }}.json
+          TRUSTED: ${{ runner.temp }}/trusted
+          TARGET_SHA: ${{ inputs.target-sha }}
+          OUTPUT_FILE: ${{ runner.temp }}/coding-agent-output.json
+        run: |
+          set -euo pipefail
+          (cd "$TRUSTED" && npm ci --ignore-scripts --no-audit --no-fund)
+          if ! node "$TRUSTED/.github/scripts/coding-agent/acceptance-criteria.mjs" \
+            --request "$REQUEST_FILE" \
+            --output "$OUTPUT_FILE" \
+            --base-sha "$TARGET_SHA"; then
+            echo "failed=true" >> "$GITHUB_OUTPUT"
+            echo "::error::エージェントが出力した受け入れ基準を検証できませんでした。変更を取り込まずに、人に引き継ぎます"
+          fi
+
       - name: 変更内容をまとめる
-        if: steps.request.outputs.kind == 'change'
+        if: steps.request.outputs.kind == 'change' && steps.criteria.outputs.failed != 'true'
         env:
           TARGET_SHA: ${{ inputs.target-sha }}
           OUTPUT_FILE: ${{ runner.temp }}/coding-agent-output.json
@@ -262,7 +291,7 @@ jobs:
           git diff --cached --stat "$TARGET_SHA"
 
       - name: 変更内容を保存する
-        if: steps.request.outputs.kind == 'change'
+        if: steps.request.outputs.kind == 'change' && steps.criteria.outputs.failed != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: coding-agent-result
@@ -271,7 +300,8 @@ jobs:
 
   publish:
     needs: work
-    if: needs.work.outputs.kind == 'change'
+    # 受け入れ基準を作れなかった変更は取り込まない (人への引き継ぎは hand-over ジョブが行う)
+    if: needs.work.outputs.kind == 'change' && needs.work.outputs.criteria-failed != 'true'
     uses: ./.github/workflows/coding-agent-publish.yml
     permissions:
       contents: read
@@ -286,6 +316,31 @@ jobs:
     secrets:
       # Organization か利用するリポジトリの Secrets に登録した、Codex 用の App の秘密鍵
       app-private-key: ${{ secrets.CODING_AGENT_CODEX_PRIVATE_KEY }}
+
+  # 受け入れ基準のファイルを作れなかったら (仕様の 10.2)、振り分け用のワークフローを手動実行し、進行役の App で人に引き継ぐ。
+  # このワークフローは進行役の App の秘密鍵を持たないため、needs-human ラベルを付けるのは振り分け用のワークフローが行う
+  hand-over:
+    name: 人への引き継ぎ
+    needs: work
+    if: needs.work.outputs.criteria-failed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+    steps:
+      - name: 振り分け用のワークフローに、人への引き継ぎを依頼する
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # 作成のときは段階の Issue に、修正のときは PR に引き継ぐ
+          NUMBER: ${{ inputs.mode == 'fix' && inputs.pull-request-number || inputs.issue-number }}
+        run: |
+          set -euo pipefail
+          gh workflow run coding-agent-router.yml -R "$GITHUB_REPOSITORY" \
+            -f issue-number="$NUMBER" \
+            -f hand-over=acceptance-criteria \
+            -f source-run-id="$GITHUB_RUN_ID"
+          echo "::error::変更を取り込まずに、#$NUMBER を人に引き継ぎました (acceptance-criteria)"
+          exit 1
 
   # 実装計画では、計画から進行役の App で実装タスクの Issue を作る
   tasks:
