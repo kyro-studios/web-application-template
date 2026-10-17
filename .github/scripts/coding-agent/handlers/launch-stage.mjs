@@ -14,6 +14,7 @@
  * - すべての依存先 (Sub Issue と Blocked by の Issue) が Close され、紐づく PR に Open のまま残っているものが無い
  */
 
+import { fetchCriteriaFile, readAssignment } from '../acceptance-criteria.mjs';
 import { isTrustedActor } from '../actors.mjs';
 import { agentLabel, expandStageFiles, featureDirectory, findAgentByLabel, getAuthor, getImplementers, isCoordinator, isValidFeatureName } from '../config.mjs';
 import { maxPlanTasks } from '../create-tasks.mjs';
@@ -180,6 +181,39 @@ export const launchStage = {
     const defaultBranch = /** @type {string} */ (context.payload.repository?.default_branch);
     const { data: branch } = await github.rest.repos.getBranch({ ...repository, branch: defaultBranch });
 
+    // 実装計画と実装タスクでは、作業を始めるコミットの受け入れ基準を読む (仕様の 10.4)
+    /** @type {string[] | null} */
+    let acceptanceCriteria = null;
+    if (stage === 'planning' || stage === IMPLEMENTATION_STAGE) {
+      const criteria = await fetchCriteriaFile({ github, repository, ref: branch.commit.sha, featureDir, feature: feature.number });
+      /** @type {string | undefined} */
+      let problem;
+      if ('errors' in criteria) {
+        problem = ['受け入れ基準のファイルが形式を満たしていません。', '', ...criteria.errors.map((error) => `- ${error}`)].join('\n');
+      } else if (criteria.file !== null) {
+        if (stage === 'planning') {
+          acceptanceCriteria = criteria.file.criteria.map((criterion) => criterion.id);
+        } else {
+          // 実装タスクでは、本文の割り当ての印を厳密に読む。人が本文を壊した場合などは起動しない
+          const assignment = readAssignment(issue.body, criteria.file);
+          if ('reason' in assignment) {
+            problem = `${assignment.reason}。`;
+          } else {
+            acceptanceCriteria = assignment.ids;
+          }
+        }
+      }
+      if (problem !== undefined) {
+        await github.rest.issues.createComment({
+          ...repository,
+          issue_number: issueNumber,
+          body: `🤖 「${stageName(stage)}」を起動できませんでした。${problem}\n\n直したら、振り分け用のワークフローを、この Issue の番号を指定して手動実行してください。`,
+        });
+        core.warning(`#${issueNumber} は、受け入れ基準に問題があるため起動しません`);
+        return {};
+      }
+    }
+
     const name = stageName(stage);
     await github.rest.issues.createComment({
       ...repository,
@@ -206,6 +240,8 @@ export const launchStage = {
             artifact: artifactPath(stage, featureDir),
             sharedArtifacts: sharedArtifactPaths(stage),
             documents: reviewDocuments(stage, featureDir),
+            // 受け入れ基準の識別子。実装計画では機能のすべての識別子、実装タスクでは割り当てられた識別子 (ファイルが無い機能では null)
+            acceptanceCriteria,
             ...(stage === 'planning'
               ? {
                   // 実装計画はファイルを変更せず、計画から実装タスクの Issue を作る

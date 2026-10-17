@@ -30,6 +30,7 @@ import { acceptanceCriteriaPath, IMPLEMENTATION_STAGE } from './stages.mjs';
  * @property {{ allow: string[], deny: string[] } | null} allowedFiles 変更してよいファイル (ファイルを変更しない実装計画では null)
  * @property {{ id: string, name: string }[]} [implementers] 実装タスクの担当に選べるエージェント (実装計画のみ)
  * @property {{ maxTasks: number, maxDepth: number }} [planLimits] タスクの数と親子関係の深さの上限 (実装計画のみ)
+ * @property {string[] | null} [acceptanceCriteria] 受け入れ基準の識別子。実装計画では機能のすべて、実装タスクでは割り当てられたもの (ファイルが無い機能では null)
  */
 
 /**
@@ -118,7 +119,7 @@ function formatPatterns(patterns) {
  * @returns {string[]}
  */
 function requestLines(request) {
-  const { issue, feature, artifact, sharedArtifacts = [], documents, allowedFiles, implementers, planLimits } = request.materials;
+  const { issue, feature, artifact, sharedArtifacts = [], documents, allowedFiles, implementers, planLimits, acceptanceCriteria } = request.materials;
   const lines = [`- 段階: ${stageName(request.stage)}`, `- Issue: #${issue.number} ${issue.title}`, `- 機能の親 Issue: #${feature.number} ${feature.title}`];
   if (artifact !== null) {
     lines.push(`- ${request.mode === 'fix' ? '修正する' : '作成する'}成果物: \`${artifact}\``);
@@ -144,6 +145,13 @@ function requestLines(request) {
   if (planLimits !== undefined) {
     lines.push(`- タスクの数の上限: ${planLimits.maxTasks} 件`);
     lines.push(`- 親子関係の深さの上限: ${planLimits.maxDepth} 階層 (実装計画の Issue の直下を 1 階層目とする)`);
+  }
+  if (request.stage === 'planning' && acceptanceCriteria !== undefined) {
+    lines.push(
+      acceptanceCriteria === null || acceptanceCriteria.length === 0
+        ? '- 受け入れ基準: この機能にはありません。どのタスクの acceptance_criteria も空にしてください'
+        : `- 受け入れ基準の識別子 (それぞれを、ちょうど 1 つのタスクに割り当てる): ${acceptanceCriteria.join('、')}`,
+    );
   }
   return lines;
 }

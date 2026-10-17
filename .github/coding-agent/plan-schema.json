@@ -39,9 +39,14 @@
             "type": "array",
             "items": { "type": "string" },
             "description": "このタスクより先に完了している必要があるタスクの key"
+          },
+          "acceptance_criteria": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "このタスクで受け入れテストを書いて通す、受け入れ基準の識別子 (例: AC12-3)。依頼の内容に書かれた識別子のすべてを、ちょうど 1 つのタスクに割り当てる。担当が null のタスクと、受け入れ基準が無い機能では、空の配列にする"
           }
         },
-        "required": ["key", "title", "body", "agent", "parent", "blocked_by"],
+        "required": ["key", "title", "body", "agent", "parent", "blocked_by", "acceptance_criteria"],
         "additionalProperties": false
       }
     }

@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
+import { formatCriteriaFile } from './acceptance-criteria.mjs';
 import createTasks, { maxPlanTasks, parseTaskMarker, taskMarker } from './create-tasks.mjs';
 import { createFakeCore, createFakeGitHub } from './testing/fake-github.mjs';
 import { createFixtureRoot, fixtureConfig } from './testing/fixture-config.mjs';
@@ -27,7 +28,7 @@ after(async () => {
  * @returns {import('./plan-validation.mjs').PlanTask}
  */
 function task(key, overrides = {}) {
-  return { key, title: `タスク ${key}`, body: `${key} の本文`, agent: 'claude', parent: null, blocked_by: [], ...overrides };
+  return { key, title: `タスク ${key}`, body: `${key} の本文`, agent: 'claude', parent: null, blocked_by: [], acceptance_criteria: [], ...overrides };
 }
 
 describe('maxPlanTasks', () => {
@@ -76,10 +77,14 @@ describe('createTasks', () => {
    * 機能の親 Issue と実装計画の Issue を用意し、計画をファイルに保存する。
    *
    * @param {unknown} plan
+   * @param {import('./acceptance-criteria.mjs').CriteriaFile | string} [criteria] 受け入れ基準のファイル (省略すると、ファイルが無い機能)
    */
-  async function setup(plan) {
+  async function setup(plan, criteria) {
     const fake = createFakeGitHub({ actor: config.agents.coordinator.bot, permissions: { alice: 'write', 'claude-account': 'write' } });
-    const feature = fake.addIssue({ labels: ['feature'], user: 'alice' });
+    const feature = fake.addIssue({ labels: ['feature'], user: 'alice', body: '### 機能名\n\nuser-login\n\n### 概要\n\nログインする' });
+    if (criteria !== undefined) {
+      fake.files.set(`docs/features/${feature.number}-user-login/acceptance-criteria.json`, typeof criteria === 'string' ? criteria : formatCriteriaFile(criteria));
+    }
     const planning = fake.addIssue({ labels: ['stage:planning'], parent: feature.number });
     const planPath = join(workDir, 'plan.json');
     await writeFile(planPath, JSON.stringify(plan));
@@ -91,7 +96,7 @@ describe('createTasks', () => {
       RUN_URL: 'https://example.com/run',
     });
     delete process.env.MAX_TASKS;
-    return { fake, planning };
+    return { fake, planning, feature };
   }
 
   /**
@@ -99,7 +104,7 @@ describe('createTasks', () => {
    */
   async function run(fake) {
     const core = createFakeCore();
-    const context = { repo: { owner: 'kyro-studios', repo: 'sandbox' } };
+    const context = { repo: { owner: 'kyro-studios', repo: 'sandbox' }, payload: { repository: { default_branch: 'develop' } } };
     // @ts-expect-error テストに必要な部分だけを渡す
     await createTasks({ github: fake.github, context, core, writeIntervalMs: 0 });
     return core;
@@ -189,6 +194,70 @@ describe('createTasks', () => {
     assert.equal(comment?.issue_number, planning.number);
     assert.match(comment?.body ?? '', /tasks\[0\]\.agent は claude のいずれか/);
     assert.match(comment?.body ?? '', /tasks\[1\]\.body に、仕組みの印/);
+  });
+
+  /**
+   * @param {number} feature
+   * @param {string[]} ids
+   * @returns {import('./acceptance-criteria.mjs').CriteriaFile}
+   */
+  function criteriaFile(feature, ids) {
+    return {
+      feature,
+      next_number: ids.length + 1,
+      criteria: ids.map((id) => ({ id, kind: 'api', behavior: `${id} の振る舞い`, expected: `${id} の結果`, spec_reference: '2.1' })),
+    };
+  }
+
+  it('受け入れ基準のファイルがある機能では、割り当てた基準の内容と割り当ての印を本文に書く', async () => {
+    const { fake } = await setup({
+      summary: '計画',
+      tasks: [task('setup'), task('api', { blocked_by: ['setup'], acceptance_criteria: ['AC1-2', 'AC1-1'] })],
+    });
+    const feature = [...fake.issues.values()].find((issue) => issue.labels.some((label) => label.name === 'feature'));
+    fake.files.set(`docs/features/${feature?.number}-user-login/acceptance-criteria.json`, formatCriteriaFile(criteriaFile(Number(feature?.number), ['AC1-1', 'AC1-2'])));
+
+    const core = await run(fake);
+
+    assert.deepEqual(core.failures, []);
+    const api = findTask(fake, 'api');
+    assert.match(
+      api.body,
+      /^api の本文\n\n## 受け入れ基準\n\n.+\n\n### AC1-2 \(API\)\n\n- 確かめる振る舞い: AC1-2 の振る舞い\n- 期待する結果: AC1-2 の結果\n- 仕様書の該当箇所: 2\.1\n\n### AC1-1 \(API\)/,
+    );
+    assert.match(api.body, /<!-- coding-agent-acceptance-criteria: AC1-2 AC1-1 -->\n\n---\n🤖/);
+    // 割り当てが無いタスクにも、識別子の無い印を書く
+    assert.match(findTask(fake, 'setup').body, /割り当てた受け入れ基準はありません。\n\n<!-- coding-agent-acceptance-criteria: -->/);
+  });
+
+  it('割り当てに問題があるか、受け入れ基準のファイルが形式を満たさなければ、Issue を作らずに知らせる', async () => {
+    const assignmentPlan = { summary: '計画', tasks: [task('a', { acceptance_criteria: ['AC1-1', 'AC1-9'] }), task('b', { agent: null, acceptance_criteria: ['AC1-1'] })] };
+    const first = await setup(assignmentPlan, criteriaFile(1, ['AC1-1', 'AC1-2']));
+    const count = first.fake.issues.size;
+    const core = await run(first.fake);
+    assert.equal(first.fake.issues.size, count);
+    assert.equal(core.failures.length, 1);
+    const body = first.fake.comments.at(-1)?.body ?? '';
+    assert.match(body, /タスク "b" は担当が人/);
+    assert.match(body, /AC1-9 は、受け入れ基準にありません/);
+    assert.match(body, /AC1-1 が、複数のタスク \(a、b\) に割り当てられています/);
+    assert.match(body, /AC1-2 が、どのタスクにも割り当てられていません/);
+
+    const broken = await setup({ summary: '計画', tasks: [task('a')] }, '{ "feature": 1 }');
+    const brokenCore = await run(broken.fake);
+    assert.equal(brokenCore.failures.length, 1);
+    assert.match(broken.fake.comments.at(-1)?.body ?? '', /受け入れ基準のファイルが形式を満たしていません/);
+  });
+
+  it('受け入れ基準のファイルが無い機能では、割り当ても印も無いまま Issue を作る', async () => {
+    const { fake } = await setup({ summary: '計画', tasks: [task('a', { acceptance_criteria: ['AC1-1'] })] });
+    const core = await run(fake);
+    assert.match(fake.comments.at(-1)?.body ?? '', /この機能には受け入れ基準のファイルがありません/);
+    assert.equal(core.failures.length, 1);
+
+    const { fake: plain } = await setup({ summary: '計画', tasks: [task('a')] });
+    assert.deepEqual((await run(plain)).failures, []);
+    assert.doesNotMatch(findTask(plain, 'a').body, /coding-agent-acceptance-criteria/);
   });
 
   it('実装計画の Issue でなければ、何もしない', async () => {
