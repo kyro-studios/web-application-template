@@ -25,6 +25,8 @@ import { FEATURE_LABEL, stageOf } from '../stages.mjs';
 /** 引き継ぐ理由ごとの説明 */
 export const HAND_OVER_REASONS = {
   'test-failure': 'テストの機械的な実行で、決めた回数まで直させてもテストが通りませんでした。変更は取り込んでいません。',
+  'acceptance-criteria':
+    'エージェントが出力した受け入れ基準を検証できず、受け入れ基準のファイルを作れませんでした (今の受け入れ基準に無い識別子を返したなど。仕様の 10.2)。変更は取り込んでいません。',
 };
 
 /**
