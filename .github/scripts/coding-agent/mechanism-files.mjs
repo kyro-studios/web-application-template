@@ -24,6 +24,12 @@ export const MECHANISM_FILE_PATTERNS = [
   'package.json',
   'package-lock.json',
   'scripts/postinstall.js',
+  // 受け入れテストの実行の設定 (仕様の 10.3)。テストのファイル (acceptance/tests/) は含めない
+  'acceptance/package.json',
+  'acceptance/package-lock.json',
+  'acceptance/playwright.config.ts',
+  'acceptance/.gitignore',
+  'acceptance/smoke/**',
 ];
 
 /**

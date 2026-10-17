@@ -1,0 +1,8 @@
+{
+  "name": "acceptance",
+  "private": true,
+  "description": "受け入れテストの実行の設定。テンプレートが固定で持ち、エージェントは変更しない (仕様の 10.3)",
+  "devDependencies": {
+    "@playwright/test": "1.64.1"
+  }
+}
