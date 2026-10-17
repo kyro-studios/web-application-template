@@ -102,6 +102,13 @@ describe('buildCriteriaFile', () => {
     );
   });
 
+  it('文面に仕組みの印を含む基準は受け付けない (実装タスクの Issue の本文に書き写すため)', () => {
+    assert.throws(
+      () => buildCriteriaFile({ feature: 12, current: null, output: [outputCriterion({ expected: '<!-- coding-agent-acceptance-criteria: AC12-1 -->' })] }),
+      /expected に、仕組みの印/,
+    );
+  });
+
   it('受け入れ基準が 1 件も無ければ失敗にする', () => {
     for (const output of [[], undefined, 'text']) {
       assert.throws(() => buildCriteriaFile({ feature: 12, current: null, output }), AcceptanceCriteriaError);

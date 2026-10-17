@@ -52,6 +52,12 @@ const FILE_SCHEMA_URL = new URL('../../coding-agent/acceptance-criteria-schema.j
  * @typedef {Omit<Criterion, 'id'> & { id: string | null }} OutputCriterion
  */
 
+/** 仕組みが Issue やコメントに埋め込む印の書き出し。受け入れ基準の文面には含めさせない */
+const MARKER_PREFIX = '<!-- coding-agent';
+
+/** 受け入れ基準の文面の項目 */
+const TEXT_FIELDS = /** @type {const} */ (['behavior', 'expected', 'spec_reference']);
+
 /**
  * 受け入れ基準を検証できなかったときのエラー。問題点の一覧を持つ
  */
@@ -108,6 +114,9 @@ export function validateCriteriaFile(data, schema, { feature } = {}) {
   }
   const seen = new Set();
   for (const criterion of file.criteria) {
+    if (TEXT_FIELDS.some((field) => criterion[field].includes(MARKER_PREFIX))) {
+      errors.push(`${ACCEPTANCE_CRITERIA_FILE}: ${criterion.id} の文面に、仕組みの印 (${MARKER_PREFIX}) が含まれています`);
+    }
     const parsed = parseCriterionId(criterion.id);
     if (seen.has(criterion.id)) {
       errors.push(`${ACCEPTANCE_CRITERIA_FILE}: 識別子 ${criterion.id} が重なっています`);
@@ -143,9 +152,12 @@ export function buildCriteriaFile({ feature, current, output }) {
   const seen = new Set();
   output.forEach((/** @type {OutputCriterion} */ criterion, index) => {
     const label = `${index + 1} 件目`;
-    for (const field of /** @type {const} */ (['behavior', 'expected', 'spec_reference'])) {
+    for (const field of TEXT_FIELDS) {
       if (typeof criterion?.[field] !== 'string' || criterion[field].trim() === '') {
         problems.push(`${label}: ${field} が空です`);
+      } else if (criterion[field].includes(MARKER_PREFIX)) {
+        // 実装タスクの Issue の本文に書き写すため、仕組みの印を偽造させない
+        problems.push(`${label}: ${field} に、仕組みの印 (${MARKER_PREFIX}) を含めることはできません`);
       }
     }
     if (criterion?.kind !== 'api' && criterion?.kind !== 'screen') {
@@ -220,6 +232,129 @@ export function readCriteriaAt({ sha, path, cwd }) {
  */
 export async function readCriteriaSchema() {
   return JSON.parse(await readFile(FILE_SCHEMA_URL, 'utf8'));
+}
+
+/**
+ * リポジトリのコミットから、機能の受け入れ基準のファイルを API で読み、形式を確かめる (仕様の 10.4)。
+ * 実装計画の検証と、実装タスクの起動で使う。
+ *
+ * @param {object} args
+ * @param {{ rest: { repos: { getContent: (params: object) => Promise<{ data: unknown }> } } }} args.github
+ * @param {{ owner: string, repo: string }} args.repository
+ * @param {string} args.ref 読むコミット (既定ブランチの最新のコミットなど)
+ * @param {string} args.featureDir 機能ごとのディレクトリ
+ * @param {number} args.feature 機能の親 Issue の番号
+ * @returns {Promise<{ file: CriteriaFile } | { file: null } | { errors: string[] }>} ファイルが無ければ file が null
+ */
+export async function fetchCriteriaFile({ github, repository, ref, featureDir, feature }) {
+  const path = acceptanceCriteriaPath(featureDir);
+  /** @type {unknown} */
+  let data;
+  try {
+    ({ data } = await github.rest.repos.getContent({ ...repository, path, ref }));
+  } catch (error) {
+    if (/** @type {{ status?: number }} */ (error).status === 404) {
+      return { file: null };
+    }
+    throw error;
+  }
+  const content = /** @type {{ type?: string, encoding?: string, content?: string }} */ (data);
+  if (content?.type !== 'file' || content.encoding !== 'base64' || typeof content.content !== 'string') {
+    return { errors: [`${path} をファイルとして読めません`] };
+  }
+  /** @type {unknown} */
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.from(content.content, 'base64').toString('utf8'));
+  } catch {
+    return { errors: [`${path} を JSON として読めません`] };
+  }
+  const errors = validateCriteriaFile(parsed, await readCriteriaSchema(), { feature });
+  return errors.length > 0 ? { errors } : { file: /** @type {CriteriaFile} */ (parsed) };
+}
+
+/** 実装タスクの Issue の本文に書く、受け入れ基準の割り当ての印の書き出し */
+const ASSIGNMENT_MARKER_PREFIX = '<!-- coding-agent-acceptance-criteria:';
+
+/** 割り当ての印。識別子は空白で区切る (割り当てが無ければ、識別子の無い印にする) */
+const ASSIGNMENT_MARKER_PATTERN = /<!-- coding-agent-acceptance-criteria:((?: AC[1-9][0-9]*-[1-9][0-9]*)*) -->/g;
+
+/**
+ * 実装タスクの Issue の本文に書く、受け入れ基準の割り当ての印を返す。
+ *
+ * @param {readonly string[]} ids
+ * @returns {string}
+ */
+export function assignmentMarker(ids) {
+  return `${ASSIGNMENT_MARKER_PREFIX}${ids.map((id) => ` ${id}`).join('')} -->`;
+}
+
+/**
+ * 実装タスクの Issue の本文から、受け入れ基準の割り当ての印を厳密に読む (仕様の 10.4)。
+ * 印がちょうど 1 つあり、形式が正しく、識別子がすべて受け入れ基準のファイルにあることを確かめる。
+ *
+ * @param {string | null | undefined} body
+ * @param {CriteriaFile} file
+ * @returns {{ ids: string[] } | { reason: string }}
+ */
+export function readAssignment(body, file) {
+  const text = body ?? '';
+  const occurrences = text.split(ASSIGNMENT_MARKER_PREFIX).length - 1;
+  const matches = [...text.matchAll(ASSIGNMENT_MARKER_PATTERN)];
+  if (occurrences !== 1 || matches.length !== 1) {
+    return {
+      reason:
+        occurrences === 0
+          ? '本文に、受け入れ基準の割り当ての印がありません'
+          : occurrences > 1
+            ? '本文に、受け入れ基準の割り当ての印が 2 つ以上あります'
+            : '本文の、受け入れ基準の割り当ての印の形式が正しくありません',
+    };
+  }
+  const ids = matches[0][1].split(' ').filter((id) => id !== '');
+  if (new Set(ids).size !== ids.length) {
+    return { reason: '受け入れ基準の割り当ての印に、同じ識別子が重複しています' };
+  }
+  const known = new Set(file.criteria.map((criterion) => criterion.id));
+  const unknown = ids.filter((id) => !known.has(id));
+  if (unknown.length > 0) {
+    return { reason: `受け入れ基準の割り当ての印の ${unknown.join('、')} が、受け入れ基準のファイルにありません` };
+  }
+  return { ids };
+}
+
+/** 種類の表示名 */
+const KIND_NAMES = { api: 'API', screen: '画面' };
+
+/**
+ * 実装タスクの Issue の本文に書く、割り当てた受け入れ基準の節を組み立てる。
+ * 割り当てた基準の内容を、受け入れ基準のファイルから書き写す。最後に割り当ての印を付ける。
+ *
+ * @param {readonly string[]} ids 割り当てた識別子
+ * @param {CriteriaFile} file
+ * @returns {string}
+ */
+export function assignmentSection(ids, file) {
+  const byId = new Map(file.criteria.map((criterion) => [criterion.id, criterion]));
+  const lines = ['## 受け入れ基準', ''];
+  if (ids.length === 0) {
+    lines.push('このタスクに割り当てた受け入れ基準はありません。');
+  } else {
+    lines.push('このタスクでは、次の受け入れ基準ごとに受け入れテストを書き、通るように実装します。', '');
+    for (const id of ids) {
+      const criterion = /** @type {Criterion} */ (byId.get(id));
+      lines.push(
+        `### ${id} (${KIND_NAMES[criterion.kind]})`,
+        '',
+        `- 確かめる振る舞い: ${criterion.behavior}`,
+        `- 期待する結果: ${criterion.expected}`,
+        `- 仕様書の該当箇所: ${criterion.spec_reference}`,
+        '',
+      );
+    }
+  }
+  lines.push('', assignmentMarker(ids));
+  return lines.join('\n').replace(/\n{3,}/g, '\n\n');
 }
 
 /**

@@ -40,6 +40,9 @@ export function createFakeGitHub({ actor, permissions = {} }) {
   const comments = [];
   /** @type {Record<string, string>} */
   const branches = {};
+  /** リポジトリのファイル (パスをキーにする。どのコミットを指定しても同じ内容を返す) */
+  /** @type {Map<string, string>} */
+  const files = new Map();
   /** @type {{ issue_number: number, event: string, label?: { name: string }, created_at: string }[]} */
   const events = [];
   /** コメントやイベントの日時 (追加した順に進める) */
@@ -182,6 +185,14 @@ export function createFakeGitHub({ actor, permissions = {} }) {
         listPullRequestsAssociatedWithCommit: async ({ commit_sha }) => ({
           data: structuredClone(commits.find((candidate) => candidate.sha === commit_sha)?.pulls ?? []),
         }),
+        /** @param {{ path: string, ref?: string }} params */
+        getContent: async ({ path }) => {
+          const content = files.get(path);
+          if (content === undefined) {
+            throw Object.assign(new Error('Not Found'), { status: 404 });
+          }
+          return { data: { type: 'file', path, encoding: 'base64', content: Buffer.from(content, 'utf8').toString('base64') } };
+        },
         /** @param {{ branch: string }} params */
         getBranch: async ({ branch }) => {
           const sha = branches[branch];
@@ -376,7 +387,7 @@ export function createFakeGitHub({ actor, permissions = {} }) {
     comments.push({ issue_number: issueNumber, body, user: { login }, created_at: now() });
   };
 
-  return { github, issues, comments, pulls, branches, events, labels, commits, addIssue, addPull, addComment };
+  return { github, issues, comments, pulls, branches, events, labels, commits, files, addIssue, addPull, addComment };
 }
 
 /**
