@@ -32,11 +32,13 @@ Organization の「Settings」→「Developer settings」→「GitHub Apps」→
 - 「Where can this GitHub App be installed?」は「Only on this account」にする
 - 「Repository permissions」は、次の表のとおりにする。ほかの権限は付けない
 
-| App | Contents | Issues | Pull requests |
-| --- | --- | --- | --- |
-| 進行役 | Read-only | Read and write | Read and write |
-| Claude 用 | Read and write | Read and write | Read and write |
-| Codex 用 | Read and write | Read and write | Read and write |
+| App | Actions | Contents | Issues | Pull requests |
+| --- | --- | --- | --- | --- |
+| 進行役 | Read and write | Read-only | Read and write | Read and write |
+| Claude 用 | なし | Read and write | Read and write | Read and write |
+| Codex 用 | なし | Read and write | Read and write | Read and write |
+
+- 進行役の Actions の権限は、失敗した CI を一度だけ再実行するために使う
 
 - **Workflows の権限は、どの App にも付けない**。エージェントが `.github/workflows/` を書き換えられないようにするため
 - 作ったら、App の設定の画面で、次の 2 つを控える

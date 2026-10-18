@@ -55,6 +55,16 @@ export function createFakeGitHub({ actor, permissions = {} }) {
    * @type {{ sha: string, message: string, files: { filename: string, status: string, previous_filename?: string }[], pulls: { number: number, merged_at: string | null }[] }[]}
    */
   const commits = [];
+  /**
+   * アプリケーションの CI の実行 (actions.listWorkflowRuns が返す)
+   * @type {{ id: number, run_attempt: number, event: string, head_branch: string, head_sha: string, conclusion: string | null, html_url: string }[]}
+   */
+  const workflowRuns = [];
+  /**
+   * PR ごとの Merge Queue の状態 (PR の番号をキーにする)
+   * @type {Map<number, { queued: boolean, events: { type: 'added' | 'removed', createdAt: string, beforeCommit?: string }[] }>}
+   */
+  const mergeQueues = new Map();
   /** リポジトリのラベル (名前の小文字をキーにする) */
   /** @type {Map<string, { name: string, color: string, description: string }>} */
   const labels = new Map();
@@ -165,6 +175,16 @@ export function createFakeGitHub({ actor, permissions = {} }) {
   const github = {
     rest: {
       pulls: pullsApi,
+      actions: {
+        /** @param {{ head_sha?: string, event?: string }} params */
+        listWorkflowRuns: async ({ head_sha, event }) => ({
+          data: {
+            workflow_runs: structuredClone(
+              workflowRuns.filter((run) => (head_sha === undefined || run.head_sha === head_sha) && (event === undefined || run.event === event)),
+            ),
+          },
+        }),
+      },
       repos: {
         /** @param {{ per_page: number }} params */
         compareCommitsWithBasehead: async ({ per_page }) => ({
@@ -341,6 +361,26 @@ export function createFakeGitHub({ actor, permissions = {} }) {
         issue.blockedBy.push(blocking.number);
         return { addBlockedBy: { issue: { id: issue.node_id } } };
       }
+      if (query.includes('mergeQueueEntry')) {
+        if (!pulls.has(variables.number)) {
+          return { repository: { pullRequest: null } };
+        }
+        const state = mergeQueues.get(variables.number) ?? { queued: false, events: [] };
+        return {
+          repository: {
+            pullRequest: {
+              mergeQueueEntry: state.queued ? { id: `MQE_${variables.number}` } : null,
+              timelineItems: {
+                nodes: state.events.map((event) =>
+                  event.type === 'added'
+                    ? { __typename: 'AddedToMergeQueueEvent', createdAt: event.createdAt }
+                    : { __typename: 'RemovedFromMergeQueueEvent', createdAt: event.createdAt, beforeCommit: event.beforeCommit ? { oid: event.beforeCommit } : null },
+                ),
+              },
+            },
+          },
+        };
+      }
       if (query.includes('closingIssuesReferences')) {
         const pull = pulls.get(variables.number);
         return { repository: { pullRequest: pull && { closingIssuesReferences: { nodes: pull.closing.map((number) => ({ number })) } } } };
@@ -387,7 +427,7 @@ export function createFakeGitHub({ actor, permissions = {} }) {
     comments.push({ issue_number: issueNumber, body, user: { login }, created_at: now() });
   };
 
-  return { github, issues, comments, pulls, branches, events, labels, commits, files, addIssue, addPull, addComment };
+  return { github, issues, comments, pulls, branches, events, labels, commits, files, workflowRuns, mergeQueues, addIssue, addPull, addComment };
 }
 
 /**

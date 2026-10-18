@@ -4,15 +4,18 @@
  * 指示の本文は、既定ブランチの .github/coding-agent/prompts/ から読む (promptFiles を参照)。
  *
  * 使い方 (作成担当のワークフローから実行する):
- *   node author-prompt.mjs --request <依頼の JSON> --prompts <指示のディレクトリ> --prompt-out <指示の出力先> [--conflicts <ファイル>]
+ *   node author-prompt.mjs --request <依頼の JSON> --prompts <指示のディレクトリ> --prompt-out <指示の出力先> [--conflicts <ファイル>] [--ci-log <ファイル>]
  *
- * --conflicts には、既定ブランチを取り込んでコンフリクトしたファイルの一覧 (1 行に 1 つ) を渡す (コンフリクトの修正のみ)。
+ * --conflicts には、既定ブランチを取り込んでコンフリクトしたファイルの一覧 (1 行に 1 つ) を渡す (既定ブランチを取り込んだ修正のみ)。
+ * CI の失敗の修正で取り込んだときにコンフリクトした場合も、コンフリクトの解消の指示を加える。
+ * --ci-log には、失敗した CI のジョブのログ (末尾) を渡す (CI の失敗の修正のみ)。
  */
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
+import { ciFailureReason } from './ci-runs.mjs';
 import { readKnowledge } from './knowledge.mjs';
 import { projectBackgroundFor, projectBackgroundLines } from './project-background.mjs';
 import { fence, knowledgeLines, stageName } from './prompt-format.mjs';
@@ -39,6 +42,7 @@ import { acceptanceCriteriaPath, IMPLEMENTATION_STAGE } from './stages.mjs';
  *   pullRequest: { number: number, title: string, body: string, headRef: string },
  *   review: { id: number, body: string, comments: { path: string, line: number | null, body: string }[] } | null,
  *   conflict: { baseSha: string, files?: string[] } | null,
+ *   ciFailure?: { event: string, runId: number, runAttempt: number, runUrl: string, baseSha: string, log?: string } | null,
  *   fixRound: number,
  *   maxFixRounds: number,
  * }} FixMaterials
@@ -61,18 +65,19 @@ const ACCEPTANCE_CRITERIA_STAGE = 'specification';
  *   実装タスクは、実装の指示と、作成のときの出力の指示を続ける
  * - どちらも、最後に段階に渡す知識 (knowledge.mjs) を加える。知識はここでは返さず、readKnowledge で読む
  * - 修正: 修正に共通する指示に、段階ごとの作成の指示を参考として続ける。出力の指示は修正に共通する指示にあるため、
- *   作成のときの出力の指示は含めない。コンフリクトの修正では、コンフリクトの解消の指示を加える
+ *   作成のときの出力の指示は含めない。コンフリクトの修正では、コンフリクトの解消の指示を、CI の失敗の修正では、
+ *   CI の失敗の指示を加える
  * - 仕様書の段階では、作成と修正のどちらでも、最後に受け入れ基準の出力の指示 (specification-output.md) を加える
  *
  * @param {'create' | 'fix'} mode
  * @param {string} stage
- * @param {{ conflict?: boolean }} [options]
+ * @param {{ conflict?: boolean, ciFailure?: boolean }} [options]
  * @returns {string[]}
  */
-export function promptFiles(mode, stage, { conflict = false } = {}) {
+export function promptFiles(mode, stage, { conflict = false, ciFailure = false } = {}) {
   const criteriaOutput = stage === ACCEPTANCE_CRITERIA_STAGE ? ['create/specification-output.md'] : [];
   if (mode === 'fix') {
-    return ['fix/common.md', `create/${stage}.md`, ...(conflict ? ['fix/conflict.md'] : []), ...criteriaOutput];
+    return ['fix/common.md', `create/${stage}.md`, ...(conflict ? ['fix/conflict.md'] : []), ...(ciFailure ? ['fix/ci-failure.md'] : []), ...criteriaOutput];
   }
   if (stage === 'planning') {
     return ['create/common.md', 'create/planning.md'];
@@ -197,7 +202,7 @@ export function buildCreatePrompt({ request, prompts, knowledge = [], acceptance
  * @param {object} args
  * @param {import('./agent-request.mjs').AgentRequest & { materials: FixMaterials }} args.request
  * @param {string[]} args.prompts 指示のファイルの本文 (promptFiles の順。修正に共通する指示、段階ごとの作成の指示、
- *   コンフリクトの解消の指示 (コンフリクトの修正のみ)、受け入れ基準の出力の指示 (仕様書の段階のみ))
+ *   コンフリクトの解消の指示 (コンフリクトの修正のみ)、CI の失敗の指示 (CI の失敗の修正のみ)、受け入れ基準の出力の指示 (仕様書の段階のみ))
  * @param {{ name: string, body: string }[]} [args.knowledge] 段階に渡す知識 (readKnowledge で読んだもの)
  * @param {import('./acceptance-criteria.mjs').Criterion[] | null} [args.acceptanceCriteria] 今の受け入れ基準 (仕様書の段階のみ。無ければ null)
  * @param {string | null} [args.projectBackground] プロジェクトの背景 (無ければ null。背景を渡さない段階では省略する)
@@ -205,13 +210,21 @@ export function buildCreatePrompt({ request, prompts, knowledge = [], acceptance
  */
 export function buildFixPrompt({ request, prompts, knowledge = [], acceptanceCriteria, projectBackground }) {
   const [common, stagePrompt, ...rest] = prompts;
-  const { pullRequest, review, conflict, fixRound, maxFixRounds } = request.materials;
+  const { pullRequest, review, conflict, ciFailure, fixRound, maxFixRounds } = request.materials;
   const conflictPrompt = conflict ? rest.shift() : undefined;
+  const ciFailurePrompt = ciFailure ? rest.shift() : undefined;
   const criteriaOutputPrompt = request.stage === ACCEPTANCE_CRITERIA_STAGE ? rest.shift() : undefined;
-  const reasons = [...(review ? ['レビューの指摘'] : []), ...(conflict ? ['既定ブランチとのコンフリクト'] : [])];
+  const reasons = [
+    ...(review ? ['レビューの指摘'] : []),
+    ...(conflict ? ['既定ブランチとのコンフリクト'] : []),
+    ...(ciFailure ? [ciFailureReason(ciFailure.event)] : []),
+  ];
   const lines = [common.trim(), ''];
   if (conflict && conflictPrompt !== undefined) {
     lines.push(conflictPrompt.trim(), '');
+  }
+  if (ciFailure && ciFailurePrompt !== undefined) {
+    lines.push(ciFailurePrompt.trim(), '');
   }
   if (criteriaOutputPrompt !== undefined) {
     lines.push(criteriaOutputPrompt.trim(), '');
@@ -235,6 +248,10 @@ export function buildFixPrompt({ request, prompts, knowledge = [], acceptanceCri
     const files = conflict.files ?? [];
     lines.push('', '### コンフリクトしたファイル', '');
     lines.push(...(files.length === 0 ? ['(ありません。取り込んだ時点で、自動でマージできました)'] : files.map((file) => `- \`${file}\``)));
+  }
+  if (ciFailure) {
+    lines.push('', '### 失敗した CI のログ', '', `CI の実行: ${ciFailure.runUrl} (${ciFailure.runAttempt} 回目の実行)`, '');
+    lines.push(ciFailure.log === undefined || ciFailure.log.trim() === '' ? '(ログを取得できませんでした。テストを実行して、失敗の原因を確かめてください)' : fence(ciFailure.log));
   }
   if (review) {
     lines.push('', '### レビューの所見', '', fence(review.body));
@@ -285,6 +302,7 @@ async function main(args) {
       prompts: { type: 'string' },
       'prompt-out': { type: 'string' },
       conflicts: { type: 'string' },
+      'ci-log': { type: 'string' },
     },
     strict: true,
   });
@@ -298,13 +316,24 @@ async function main(args) {
   if (request.mode !== 'create' && request.mode !== 'fix') {
     throw new Error(`作成や修正の依頼ではありません: ${request.mode}`);
   }
-  const conflict = request.mode === 'fix' ? request.materials.conflict : null;
-  if (conflict && values.conflicts !== undefined) {
-    // コンフリクトしたファイルは、既定ブランチを取り込んだ作成担当のワークフローが求める
-    conflict.files = (await readFile(values.conflicts, 'utf8')).split('\n').filter((line) => line.trim() !== '');
+  const ciFailure = request.mode === 'fix' ? (request.materials.ciFailure ?? null) : null;
+  if (ciFailure && values['ci-log'] !== undefined) {
+    // 失敗した CI のログは、作成担当のワークフローが CI の実行から取得する
+    ciFailure.log = await readFile(values['ci-log'], 'utf8');
   }
+  if (request.mode === 'fix' && values.conflicts !== undefined) {
+    // コンフリクトしたファイルは、既定ブランチを取り込んだ作成担当のワークフローが求める
+    const conflicted = (await readFile(values.conflicts, 'utf8')).split('\n').filter((line) => line.trim() !== '');
+    if (request.materials.conflict) {
+      request.materials.conflict.files = conflicted;
+    } else if (ciFailure && conflicted.length > 0) {
+      // CI の失敗の修正で既定ブランチを取り込んだら、コンフリクトした。コンフリクトの修正と同じく解消させる
+      request.materials.conflict = { baseSha: ciFailure.baseSha, files: conflicted };
+    }
+  }
+  const conflict = request.mode === 'fix' ? request.materials.conflict : null;
   const promptsDir = /** @type {string} */ (values.prompts);
-  const files = promptFiles(request.mode, request.stage, { conflict: Boolean(conflict) });
+  const files = promptFiles(request.mode, request.stage, { conflict: Boolean(conflict), ciFailure: Boolean(ciFailure) });
   const prompts = await Promise.all(files.map((file) => readFile(join(promptsDir, file), 'utf8')));
   const knowledge = await readKnowledge(request.stage);
   const acceptanceCriteria = request.stage === ACCEPTANCE_CRITERIA_STAGE ? await readCurrentCriteria(request.materials.featureDir) : undefined;

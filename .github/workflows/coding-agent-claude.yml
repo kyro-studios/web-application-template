@@ -61,9 +61,11 @@ jobs:
     outputs:
       agent: ${{ steps.request.outputs.agent }}
       kind: ${{ steps.request.outputs.kind }}
-      merge-sha: ${{ steps.request.outputs.merge-sha }}
+      # 実際に取り込んだ既定ブランチのコミット (取り込んでいなければ空)
+      merge-sha: ${{ steps.merge.outputs.sha }}
       tests-failed: ${{ steps.test-result.outputs.tests-failed }}
       criteria-failed: ${{ steps.criteria.outputs.failed }}
+      ci-unresolved: ${{ steps.ci-check.outputs.unresolved }}
     steps:
       - name: 作業を始めるコミットをチェックアウトする
         uses: actions/checkout@v7
@@ -112,13 +114,22 @@ jobs:
             exit 1
           fi
           echo "agent=$(jq -r '.agent' "$request")" >> "$GITHUB_OUTPUT"
-          # コンフリクトの修正では、取り込む既定ブランチのコミットが依頼に含まれる
-          merge_sha="$(jq -r '.materials.conflict.baseSha // ""' "$request")"
+          # コンフリクトと CI の失敗の修正では、取り込む既定ブランチのコミットが依頼に含まれる (どちらも同じコミット)
+          merge_sha="$(jq -r '.materials.conflict.baseSha // .materials.ciFailure.baseSha // ""' "$request")"
           if [ -n "$merge_sha" ] && [[ ! "$merge_sha" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::取り込むコミットの SHA が正しくありません: $merge_sha"
             exit 1
           fi
           echo "merge-sha=$merge_sha" >> "$GITHUB_OUTPUT"
+          # CI の失敗の修正では、失敗した CI の実行が依頼に含まれる (仕様の 9.2)
+          ci_run_id="$(jq -r '.materials.ciFailure.runId // ""' "$request")"
+          ci_run_attempt="$(jq -r '.materials.ciFailure.runAttempt // ""' "$request")"
+          if [ -n "$ci_run_id" ] && { [[ ! "$ci_run_id" =~ ^[1-9][0-9]{0,19}$ ]] || [[ ! "$ci_run_attempt" =~ ^[1-9][0-9]{0,4}$ ]]; }; then
+            echo "::error::失敗した CI の実行の ID か回数が正しくありません: $ci_run_id ($ci_run_attempt)"
+            exit 1
+          fi
+          echo "ci-run-id=$ci_run_id" >> "$GITHUB_OUTPUT"
+          echo "ci-run-attempt=$ci_run_attempt" >> "$GITHUB_OUTPUT"
           # モデルと effort を Claude Code の引数にする (振り分け用のワークフローで形式を検証済み。念のため確かめる)
           model="$(jq -r '.execution.model // ""' "$request")"
           effort="$(jq -r '.execution.effort // ""' "$request")"
@@ -177,8 +188,10 @@ jobs:
             echo "acceptance-criteria=$criteria" >> "$GITHUB_OUTPUT"
           fi
 
-      # コンフリクトの修正では、既定ブランチのコミットを取り込み (コミットはしない)、コンフリクトの印をエージェントに解消させる
+      # コンフリクトと CI の失敗の修正では、既定ブランチのコミットを取り込み (コミットはしない)、コンフリクトの印をエージェントに解消させる。
+      # 取り込んだコミットを出力する (取り込むものが無ければ空。書き込みジョブは、空でなければマージのコミットとして push する)
       - name: 既定ブランチを取り込む
+        id: merge
         if: steps.request.outputs.merge-sha != ''
         env:
           MERGE_SHA: ${{ steps.request.outputs.merge-sha }}
@@ -188,6 +201,13 @@ jobs:
           git config user.email coding-agent@users.noreply.github.com
           # チェックアウトで SHA を指定すると、そのコミットの履歴しか取得しないため、取り込むコミットを取得する
           git fetch --no-tags origin "$MERGE_SHA"
+          # CI の失敗の修正で、既定ブランチに新しいコミットが無ければ取り込まない (コンフリクトしていれば、必ず新しいコミットがある)
+          if git merge-base --is-ancestor "$MERGE_SHA" HEAD; then
+            echo "既定ブランチのコミット $MERGE_SHA は、取り込み済みです"
+            : > "$RUNNER_TEMP/conflicts.txt"
+            echo "sha=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # コンフリクトしても止めない。取り込みの途中の状態 (MERGE_HEAD) になっていることだけを確かめる
           git merge --no-ff --no-commit "$MERGE_SHA" || true
           if ! git rev-parse -q --verify MERGE_HEAD > /dev/null; then
@@ -197,20 +217,51 @@ jobs:
           git diff --name-only --diff-filter=U > "$RUNNER_TEMP/conflicts.txt"
           echo "コンフリクトしたファイル:"
           cat "$RUNNER_TEMP/conflicts.txt"
+          echo "sha=$MERGE_SHA" >> "$GITHUB_OUTPUT"
+
+      # CI の失敗の修正では、失敗した CI のジョブのログの末尾を、指示に含める (仕様の 9.2)。
+      # 取得できなくても止めない (指示で、テストを実行して原因を確かめるよう伝える)
+      - name: 失敗した CI のログを取得する
+        if: steps.request.outputs.ci-run-id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.request.outputs.ci-run-id }}
+          RUN_ATTEMPT: ${{ steps.request.outputs.ci-run-attempt }}
+        run: |
+          set -uo pipefail
+          log="$RUNNER_TEMP/ci-failure.log"
+          : > "$log"
+          jobs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs" --paginate \
+            --jq '.jobs[] | select(.conclusion == "failure") | "\(.id)\t\(.name)"')" || echo "::warning::失敗した CI のジョブを取得できませんでした"
+          while IFS=$'\t' read -r job_id job_name; do
+            [ -n "$job_id" ] || continue
+            {
+              echo "===== ジョブ: $job_name ====="
+              # ログには色の指定 (端末のエスケープシーケンス) が含まれ、gh api は出力を拒むため、curl で取得する。
+              # ログの取得先へのリダイレクトでは、curl は認証のヘッダーを送らない。
+              # 色の指定と行の先頭の時刻を除き、末尾だけを渡す (指示が長くなりすぎないようにする)
+              curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+                "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/jobs/$job_id/logs" |
+                sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g; s/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z //' | tail -n 300
+            } >> "$log" || echo "::warning::ジョブ $job_id のログを取得できませんでした"
+          done <<< "$jobs"
+          echo "取得したログ: $(wc -l < "$log") 行"
 
       - name: 作業の指示を作る
         id: prompt
         env:
           REQUEST_FILE: ${{ runner.temp }}/coding-agent-requests/${{ inputs.request-id }}.json
           TRUSTED: ${{ runner.temp }}/trusted
-          MERGE_SHA: ${{ steps.request.outputs.merge-sha }}
+          MERGE_SHA: ${{ steps.merge.outputs.sha }}
+          CI_RUN_ID: ${{ steps.request.outputs.ci-run-id }}
         run: |
           set -euo pipefail
           node "$TRUSTED/.github/scripts/coding-agent/author-prompt.mjs" \
             --request "$REQUEST_FILE" \
             --prompts "$TRUSTED/.github/coding-agent/prompts" \
             --prompt-out "$RUNNER_TEMP/author-prompt.md" \
-            ${MERGE_SHA:+--conflicts "$RUNNER_TEMP/conflicts.txt"}
+            ${MERGE_SHA:+--conflicts "$RUNNER_TEMP/conflicts.txt"} \
+            ${CI_RUN_ID:+--ci-log "$RUNNER_TEMP/ci-failure.log"}
           delimiter="PROMPT_$(openssl rand -hex 16)"
           {
             echo "prompt<<$delimiter"
@@ -278,7 +329,7 @@ jobs:
 
       # Markdown の見出しの下線 (=======) と区別するため、始まりと終わりの印だけを確かめる
       - name: コンフリクトの印が残っていないか確かめる
-        if: steps.request.outputs.merge-sha != ''
+        if: steps.merge.outputs.sha != ''
         run: |
           set -euo pipefail
           remaining=()
@@ -561,8 +612,22 @@ jobs:
             echo "::error::エージェントが出力した受け入れ基準を検証できませんでした。変更を取り込まずに、人に引き継ぎます"
           fi
 
+      # CI の失敗の修正で、既定ブランチに新しいコミットが無く、エージェントも何も変えなかったら、人に引き継ぐ (仕様の 9.2)。
+      # このまま終えると、PR は CI が失敗したまま止まってしまうため
+      - name: CI の失敗の修正で変更があるか確かめる
+        id: ci-check
+        if: steps.request.outputs.ci-run-id != ''
+        env:
+          TARGET_SHA: ${{ inputs.target-sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "$(git status --porcelain)" ] && [ "$(git rev-parse HEAD)" = "$TARGET_SHA" ]; then
+            echo "unresolved=true" >> "$GITHUB_OUTPUT"
+            echo "::error::CI の失敗の修正で、変更がありませんでした。人に引き継ぎます"
+          fi
+
       - name: 変更内容をまとめる
-        if: steps.request.outputs.kind == 'change' && steps.test-result.outputs.tests-failed != 'true' && steps.criteria.outputs.failed != 'true'
+        if: steps.request.outputs.kind == 'change' && steps.test-result.outputs.tests-failed != 'true' && steps.criteria.outputs.failed != 'true' && steps.ci-check.outputs.unresolved != 'true'
         env:
           TARGET_SHA: ${{ inputs.target-sha }}
           # テストの失敗を直させた場合は、最後に直させた作業の出力 (変更の全体について書き直したもの) を使う
@@ -578,7 +643,7 @@ jobs:
           git diff --cached --stat "$TARGET_SHA"
 
       - name: 変更内容を保存する
-        if: steps.request.outputs.kind == 'change' && steps.test-result.outputs.tests-failed != 'true' && steps.criteria.outputs.failed != 'true'
+        if: steps.request.outputs.kind == 'change' && steps.test-result.outputs.tests-failed != 'true' && steps.criteria.outputs.failed != 'true' && steps.ci-check.outputs.unresolved != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: coding-agent-result
@@ -587,8 +652,9 @@ jobs:
 
   publish:
     needs: work
-    # テストが通らなかった変更と、受け入れ基準を作れなかった変更は取り込まない (人への引き継ぎは hand-over ジョブが行う)
-    if: needs.work.outputs.kind == 'change' && needs.work.outputs.tests-failed != 'true' && needs.work.outputs.criteria-failed != 'true'
+    # テストが通らなかった変更と、受け入れ基準を作れなかった変更は取り込まない。CI の失敗の修正で変更が無ければ、push するものが無い
+    # (人への引き継ぎは hand-over ジョブが行う)
+    if: needs.work.outputs.kind == 'change' && needs.work.outputs.tests-failed != 'true' && needs.work.outputs.criteria-failed != 'true' && needs.work.outputs.ci-unresolved != 'true'
     uses: ./.github/workflows/coding-agent-publish.yml
     permissions:
       contents: read
@@ -604,13 +670,13 @@ jobs:
       # Organization か利用するリポジトリの Secrets に登録した、Claude 用の App の秘密鍵
       app-private-key: ${{ secrets.CODING_AGENT_CLAUDE_PRIVATE_KEY }}
 
-  # テストが通らなかったら (仕様の 6.4)、または受け入れ基準のファイルを作れなかったら (仕様の 10.2)、
-  # 振り分け用のワークフローを手動実行し、進行役の App で人に引き継ぐ。
+  # テストが通らなかったら (仕様の 6.4)、受け入れ基準のファイルを作れなかったら (仕様の 10.2)、
+  # または CI の失敗の修正で変更が無かったら (仕様の 9.2)、振り分け用のワークフローを手動実行し、進行役の App で人に引き継ぐ。
   # このワークフローは進行役の App の秘密鍵を持たないため、needs-human ラベルを付けるのは振り分け用のワークフローが行う
   hand-over:
     name: 人への引き継ぎ
     needs: work
-    if: needs.work.outputs.tests-failed == 'true' || needs.work.outputs.criteria-failed == 'true'
+    if: needs.work.outputs.tests-failed == 'true' || needs.work.outputs.criteria-failed == 'true' || needs.work.outputs.ci-unresolved == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -621,7 +687,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           # 作成のときは段階の Issue に、修正のときは PR に引き継ぐ
           NUMBER: ${{ inputs.mode == 'fix' && inputs.pull-request-number || inputs.issue-number }}
-          REASON: ${{ needs.work.outputs.criteria-failed == 'true' && 'acceptance-criteria' || 'test-failure' }}
+          REASON: ${{ needs.work.outputs.criteria-failed == 'true' && 'acceptance-criteria' || needs.work.outputs.ci-unresolved == 'true' && 'ci-unresolved' || 'test-failure' }}
         run: |
           set -euo pipefail
           gh workflow run coding-agent-router.yml -R "$GITHUB_REPOSITORY" \

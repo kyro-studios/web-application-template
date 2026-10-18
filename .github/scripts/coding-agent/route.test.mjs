@@ -165,7 +165,7 @@ describe('route', () => {
         events: ['issues.closed'],
         run: async () => {
           called.push('second');
-          return { requests: [createRequest({ id: 'issue-13', issueNumber: 13 })], redispatch: [3, 3, 4] };
+          return { requests: [createRequest({ id: 'issue-13', issueNumber: 13 })], redispatch: [3, 3, 4], rerun: [501, 501] };
         },
       },
     ]);
@@ -186,6 +186,8 @@ describe('route', () => {
     assert.deepEqual((await readdir(requestDir)).sort(), ['issue-12.json', 'issue-13.json']);
     // 振り分けをやり直す Issue は、重複を取り除いて出力する
     assert.deepEqual(JSON.parse(core.outputs['redispatch-issues']), [3, 4]);
+    // 再実行する CI の実行も、重複を取り除いて出力する
+    assert.deepEqual(JSON.parse(core.outputs['rerun-runs']), [501]);
   });
 
   it('停止中は、停止中も動かすハンドラーだけを実行し、処理しなかったことを停止中の Issue に残す', async () => {
