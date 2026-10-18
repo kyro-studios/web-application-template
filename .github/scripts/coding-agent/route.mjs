@@ -27,12 +27,15 @@
  * 出力 (route):
  * - dispatches: エージェントのワークフローの呼び出し方 (AgentDispatch) の JSON 配列
  * - redispatch-issues: 振り分けをやり直す Issue の番号の JSON 配列
+ * - rerun-runs: 失敗したジョブを再実行する、CI の実行の ID の JSON 配列 (CI の失敗の検知)。再実行には Actions の
+ *   書き込み権限が要るため、ワークフローが、その権限を含む進行役の App のトークンを発行して行う
  */
 
 import { toDispatch, validateRequest, writeRequest } from './agent-request.mjs';
 import { ConfigError, getAgent, loadConfig } from './config.mjs';
 import { closeParent } from './handlers/close-parent.mjs';
 import { findHaltIssue } from './halt.mjs';
+import { detectCiFailure } from './handlers/detect-ci-failure.mjs';
 import { detectConflicts } from './handlers/detect-conflicts.mjs';
 import { detectUntrackedChanges } from './handlers/detect-untracked-changes.mjs';
 import { handOver } from './handlers/hand-over.mjs';
@@ -69,13 +72,14 @@ import { startFeature } from './handlers/start-feature.mjs';
  * @typedef {object} HandlerResult
  * @property {import('./agent-request.mjs').AgentRequest[]} [requests] エージェントへの依頼
  * @property {number[]} [redispatch] 振り分けをやり直す Issue の番号
+ * @property {number[]} [rerun] 失敗したジョブを再実行する、CI の実行の ID
  */
 
 /**
  * イベントごとの処理。作る順番に沿って追加していく。
  * @type {readonly Handler[]}
  */
-export const HANDLERS = [startFeature, closeParent, wakeWaitingStages, launchStage, requestReview, requestFix, handOver, detectUntrackedChanges, detectConflicts];
+export const HANDLERS = [startFeature, closeParent, wakeWaitingStages, launchStage, requestReview, requestFix, handOver, detectUntrackedChanges, detectConflicts, detectCiFailure];
 
 /**
  * 停止中の Issue に残すための、イベントの説明を作る。
@@ -89,7 +93,7 @@ export function describeEvent(context) {
   if (number !== undefined && number !== '') {
     return `\`${key}\` (#${number})`;
   }
-  const sha = context.payload.after;
+  const sha = context.payload.after ?? context.payload.workflow_run?.head_sha;
   return typeof sha === 'string' ? `\`${key}\` (${sha.slice(0, 7)})` : `\`${key}\``;
 }
 
@@ -174,6 +178,7 @@ export function createRouter(handlers) {
     async route({ github, context, core }) {
       core.setOutput('dispatches', '[]');
       core.setOutput('redispatch-issues', '[]');
+      core.setOutput('rerun-runs', '[]');
 
       const config = await readConfig(core);
       if (config === undefined) {
@@ -185,6 +190,8 @@ export function createRouter(handlers) {
       const requests = [];
       /** @type {Set<number>} */
       const redispatch = new Set();
+      /** @type {Set<number>} */
+      const rerun = new Set();
       const handlersToRun = await findHandlers(args);
 
       // 停止中は、停止中も動かすハンドラー (PR を通らない変更の検知) だけを実行し、ほかは処理しなかったことを残す
@@ -206,10 +213,17 @@ export function createRouter(handlers) {
         for (const issueNumber of result.redispatch ?? []) {
           redispatch.add(issueNumber);
         }
+        for (const runId of result.rerun ?? []) {
+          rerun.add(runId);
+        }
       }
       if (redispatch.size > 0) {
         core.info(`振り分けをやり直します: ${[...redispatch].map((number) => `#${number}`).join('、')}`);
         core.setOutput('redispatch-issues', JSON.stringify([...redispatch]));
+      }
+      if (rerun.size > 0) {
+        core.info(`CI を再実行します: ${[...rerun].join('、')}`);
+        core.setOutput('rerun-runs', JSON.stringify([...rerun]));
       }
 
       // 1 件でも問題があれば、どのエージェントも呼び出さない
