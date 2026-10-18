@@ -57,7 +57,7 @@
   },
   "roles": {
     "requirements": {
-      "reviewer": { "agent": "codex", "model": "gpt-6.1-sol", "effort": "medium" }
+      "reviewer": { "agent": "codex", "model": "gpt-6-luna", "effort": "medium" }
     },
     "specification": {
       "author": { "agent": "claude", "model": "claude-haiku-5-5", "effort": "high" },
