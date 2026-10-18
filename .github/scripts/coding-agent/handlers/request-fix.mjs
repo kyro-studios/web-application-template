@@ -206,12 +206,10 @@ export const requestFix = {
 
     // 理由 3: 今の head の CI の失敗 (仕様の 9.2)。失敗した CI の実行ごとに、一度だけ依頼する。
     // PR の CI は、自動の再実行でも失敗したものだけを扱う。Merge Queue の CI は、今の head が Approve されてから
-    // Merge Queue に入り、CI の失敗で外されたものだけを扱う。
-    // 文書の段階の PR は、テストの対象のコードを変えないため、CI が失敗しても原因は PR の外にあり、エージェントには直せない
-    const pullRequestRun = CI_FIX_STAGES.has(stage) ? await latestPullRequestRun(github, repository, pullRequest) : undefined;
-    const failedRun = !CI_FIX_STAGES.has(stage)
-      ? undefined
-      : pullRequestRun !== undefined && pullRequestRun.conclusion === FAILURE_CONCLUSION && pullRequestRun.attempt > AUTO_RERUN_ATTEMPTS
+    // Merge Queue に入り、CI の失敗で外されたものだけを扱う
+    const pullRequestRun = await latestPullRequestRun(github, repository, pullRequest);
+    const failedRun =
+      pullRequestRun !== undefined && pullRequestRun.conclusion === FAILURE_CONCLUSION && pullRequestRun.attempt > AUTO_RERUN_ATTEMPTS
         ? pullRequestRun
         : latest !== undefined && latest.state === 'APPROVED' && latest.commitId === pullRequest.head.sha
           ? await findMergeQueueFailure(github, repository, { pullRequestNumber: number, approvedAt: latest.submittedAt, defaultBranch })
@@ -219,7 +217,30 @@ export const requestFix = {
     /** @type {{ event: string, runId: number, runAttempt: number, runUrl: string, baseSha: string } | undefined} */
     let ciFailure;
     if (failedRun !== undefined && requested(ciFixRequestMarker(failedRun.id, failedRun.attempt))) {
-      core.notice(`#${number} は、この CI の失敗について修正を依頼済みです (依頼し直す場合は、force を有効にして手動実行してください)`);
+      core.notice(`#${number} は、この CI の失敗について修正を依頼済みか、人に引き継ぎ済みです (依頼し直す場合は、force を有効にして手動実行してください)`);
+    } else if (failedRun !== undefined && !CI_FIX_STAGES.has(stage)) {
+      // 文書の段階の PR は、テストの対象のコードを変えないため、CI が失敗しても原因は PR の外にあり、エージェントには直せない。
+      // そのままでは CI が失敗したまま止まるため、人に引き継ぐ。同じ実行の失敗で二重に引き継がないよう、印を残す
+      const owner = feature.user?.login;
+      await github.rest.issues.addLabels({ ...repository, issue_number: number, labels: [NEEDS_HUMAN_LABEL] });
+      if (owner !== undefined) {
+        await github.rest.issues.addAssignees({ ...repository, issue_number: number, assignees: [owner] });
+      }
+      await github.rest.issues.createComment({
+        ...repository,
+        issue_number: number,
+        body: [
+          `🤖 ${ciFailureReason(failedRun.event)}がありましたが、文書の段階の PR のため、原因は PR の外 (既定ブランチのコードやテスト) にあり、エージェントには直せません。自動の作業を止めて、人に引き継ぎます。`,
+          '',
+          `失敗したログは、[CI の実行](${failedRun.url}) で確かめられます。`,
+          '',
+          `${owner === undefined ? '' : `@${owner} `}原因を直したら、\`${NEEDS_HUMAN_LABEL}\` ラベルを外してください。外すと、改めてレビューします。`,
+          '',
+          ciFixRequestMarker(failedRun.id, failedRun.attempt),
+        ].join('\n'),
+      });
+      core.notice(`#${number} は文書の段階の PR で、CI の失敗をエージェントに直せないため、人に引き継ぎました`);
+      return {};
     } else if (failedRun !== undefined) {
       ciFailure = { event: failedRun.event, runId: failedRun.id, runAttempt: failedRun.attempt, runUrl: failedRun.url, baseSha: await getDefaultBranchSha() };
     }

@@ -343,11 +343,26 @@ describe('requestFix', () => {
     assert.deepEqual(await attempt({ branch: `gh-readonly-queue/develop/pr-999-${DEVELOP_SHA}` }), {});
   });
 
-  it('文書の段階の PR では、CI が失敗しても修正を依頼しない (原因が PR の外にあるため)', async () => {
-    const { fake } = setup({ reviews: [] });
+  it('文書の段階の PR では、CI が失敗しても修正を依頼せず、人に引き継ぐ (原因が PR の外にあるため)', async () => {
+    const { fake } = setup();
     fake.branches.develop = DEVELOP_SHA;
     fake.workflowRuns.push(prRun({ id: 501, attempt: 2, conclusion: 'failure' }));
+
+    // 差し戻しがあっても、CI が通らないまま止まるため、修正を依頼せずに引き継ぐ
     assert.deepEqual((await run(fake)).result, {});
+    const pull = fake.issues.get(PR_NUMBER);
+    assert.deepEqual(pull?.labels.map((label) => label.name), ['needs-human']);
+    assert.deepEqual(pull?.assignees.map((user) => user.login), ['alice']);
+    const comment = fake.comments.at(-1)?.body ?? '';
+    assert.match(comment, /文書の段階の PR のため/);
+    assert.ok(comment.includes('https://github.com/kyro-studios/sandbox/actions/runs/501'));
+    assert.ok(comment.includes(ciFixRequestMarker(501, 2)));
+
+    // 人が needs-human ラベルを外した後に、同じ実行の失敗で二重に引き継がない (差し戻しの修正は依頼する)
+    await fake.github.rest.issues.removeLabel({ issue_number: PR_NUMBER, name: 'needs-human' });
+    const again = (await run(fake)).result;
+    assert.equal(again.requests?.length, 1);
+    assert.equal(again.requests?.[0].materials.ciFailure, null);
   });
 
   it('差し戻しは、その段階のレビュー担当のものだけを見る', async () => {
