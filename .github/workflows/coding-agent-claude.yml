@@ -237,8 +237,12 @@ jobs:
             [ -n "$job_id" ] || continue
             {
               echo "===== ジョブ: $job_name ====="
-              # 行の先頭の時刻を除き、末尾だけを渡す (指示が長くなりすぎないようにする)
-              gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$job_id/logs" | sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z //' | tail -n 300
+              # ログには色の指定 (端末のエスケープシーケンス) が含まれ、gh api は出力を拒むため、curl で取得する。
+              # ログの取得先へのリダイレクトでは、curl は認証のヘッダーを送らない。
+              # 色の指定と行の先頭の時刻を除き、末尾だけを渡す (指示が長くなりすぎないようにする)
+              curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+                "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/jobs/$job_id/logs" |
+                sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g; s/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z //' | tail -n 300
             } >> "$log" || echo "::warning::ジョブ $job_id のログを取得できませんでした"
           done <<< "$jobs"
           echo "取得したログ: $(wc -l < "$log") 行"
