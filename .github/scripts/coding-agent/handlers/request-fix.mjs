@@ -1,18 +1,21 @@
 /**
  * 修正の依頼: PR の今の head に修正が必要な理由があれば、PR を作ったエージェントに修正を依頼する。
  *
- * 修正が必要な理由は、次の 2 つ。今の head に対する理由をすべて集めて、1 回の修正でまとめて直させる (仕様の 9.1)。
+ * 修正が必要な理由は、次の 3 つ。今の head に対する理由をすべて集めて、1 回の修正でまとめて直させる (仕様の 9.1)。
  * - レビュー担当の差し戻し: その段階のレビュー担当の最新のレビューが、今の head に対する差し戻し (Request changes)
  * - コンフリクト: 既定ブランチとコンフリクトしている。修正では、既定ブランチの最新のコミットを取り込んで解消させる
+ * - CI の失敗: 今の head の PR の CI が再実行しても失敗したか、Merge Queue の CI が失敗して外された (仕様の 9.2)。
+ *   修正では、既定ブランチの最新のコミットを取り込み、失敗した CI のログを渡す
  *
  * レビュー担当のワークフローは差し戻しを投稿したら、コンフリクトの検知 (detect-conflicts.mjs) はコンフリクトを
- * 見つけたら、PR の番号を指定して振り分け用のワークフローを手動実行する。pull_request_review イベントを使わないのは、
+ * 見つけたら、PR の番号を指定して振り分け用のワークフローを手動実行する。CI の失敗の検知 (detect-ci-failure.mjs) は、
+ * PR の番号を指定して振り分けをやり直す。pull_request_review イベントを使わないのは、
  * そのイベントでは PR のブランチのワークフローとスクリプトが動き、PR の変更で振り分けの処理を書き換えられてしまうため。
  * 人が PR の番号を指定して手動実行しても、同じように処理する。
  *
  * 次のすべてを満たすときに、修正を依頼する。
  * - 仕組みで扱う PR (Draft でなく、needs-human ラベルが無いなど) で、その段階のレビュー担当以外の登録済みのエージェントが作った
- * - 修正が必要な理由があり、その理由 (レビュー、または取り込む既定ブランチのコミット) について、まだ修正を依頼していない
+ * - 修正が必要な理由があり、その理由 (レビュー、取り込む既定ブランチのコミット、または失敗した CI の実行) について、まだ修正を依頼していない
  *   (force を指定した手動実行では依頼し直す)
  *
  * 修正は、PR を作ったエージェントが、エージェントごとの修正のモデルと effort (agents.json の agents.<id>.fix) で行う。
@@ -22,8 +25,10 @@
 
 import { fetchCriteriaFile, readAssignment } from '../acceptance-criteria.mjs';
 import { isTrustedActor } from '../actors.mjs';
+import { ciFailureReason, FAILURE_CONCLUSION, findMergeQueueFailure, latestPullRequestRun } from '../ci-runs.mjs';
 import { findAgentByBot, fixExecution, getReviewer, isCoordinator } from '../config.mjs';
 import { getMergeableState, listReviewsBy } from '../github-pulls.mjs';
+import { AUTO_RERUN_ATTEMPTS } from './detect-ci-failure.mjs';
 import { CONFLICTING_STATE, mergeableStateOptions } from './detect-conflicts.mjs';
 import { NEEDS_HUMAN_LABEL, resolveStageContext, unhandledReason } from '../stage-context.mjs';
 import { isHandOverRequested } from './hand-over.mjs';
@@ -36,6 +41,9 @@ import { IMPLEMENTATION_STAGE } from '../stages.mjs';
 
 /** エージェントの App が修正を push したときに、PR のコメントに埋め込む印 */
 export const FIX_MARKER = '<!-- coding-agent-fix -->';
+
+/** CI の失敗で修正を依頼する段階 (コードを変える段階。仕様の 9.2) */
+const CI_FIX_STAGES = new Set(['project', IMPLEMENTATION_STAGE]);
 
 /** 修正の回数の上限の既定値 */
 export const DEFAULT_MAX_FIX_ROUNDS = 3;
@@ -58,6 +66,18 @@ export function fixRequestMarker(reviewId) {
  */
 export function conflictFixRequestMarker(baseSha) {
   return `<!-- coding-agent-conflict-fix-request:${baseSha} -->`;
+}
+
+/**
+ * 失敗した CI の実行について修正を依頼したときに、進行役の App が PR のコメントに埋め込む印を返す。
+ * 人が再実行して、また失敗したときにも依頼できるよう、実行の回数も含める。
+ *
+ * @param {number} runId
+ * @param {number} attempt
+ * @returns {string}
+ */
+export function ciFixRequestMarker(runId, attempt) {
+  return `<!-- coding-agent-ci-fix-request:${runId}-${attempt} -->`;
 }
 
 /**
@@ -160,21 +180,52 @@ export const requestFix = {
     }
     const reviewToFix = review !== undefined && !requested(fixRequestMarker(review.id)) ? review : undefined;
 
+    const defaultBranch = /** @type {string} */ (context.payload.repository?.default_branch);
+    /** @type {string | undefined} */
+    let defaultBranchSha;
+    // 取り込む既定ブランチのコミット (コンフリクトと CI の失敗の修正で使う)。どちらの理由でも同じコミットにする
+    const getDefaultBranchSha = async () => {
+      if (defaultBranchSha === undefined) {
+        const { data: branch } = await github.rest.repos.getBranch({ ...repository, branch: defaultBranch });
+        defaultBranchSha = /** @type {string} */ (branch.commit.sha);
+      }
+      return defaultBranchSha;
+    };
+
     // 理由 2: 既定ブランチとのコンフリクト。取り込む既定ブランチのコミットごとに、一度だけ依頼する
     /** @type {{ baseSha: string } | undefined} */
     let conflict;
     if ((await getMergeableState(github, repository, number, mergeableStateOptions)) === CONFLICTING_STATE) {
-      const defaultBranch = /** @type {string} */ (context.payload.repository?.default_branch);
-      const { data: branch } = await github.rest.repos.getBranch({ ...repository, branch: defaultBranch });
-      if (requested(conflictFixRequestMarker(branch.commit.sha))) {
+      const baseSha = await getDefaultBranchSha();
+      if (requested(conflictFixRequestMarker(baseSha))) {
         core.notice(`#${number} は、${defaultBranch} のこのコミットとのコンフリクトの解消を依頼済みです (依頼し直す場合は、force を有効にして手動実行してください)`);
       } else {
-        conflict = { baseSha: branch.commit.sha };
+        conflict = { baseSha };
       }
     }
 
-    if (reviewToFix === undefined && conflict === undefined) {
-      core.info(`#${number} は、今の head に対して修正が必要な理由が無いため、修正を依頼しません (差し戻しもコンフリクトも無いか、依頼済みです)`);
+    // 理由 3: 今の head の CI の失敗 (仕様の 9.2)。失敗した CI の実行ごとに、一度だけ依頼する。
+    // PR の CI は、自動の再実行でも失敗したものだけを扱う。Merge Queue の CI は、今の head が Approve されてから
+    // Merge Queue に入り、CI の失敗で外されたものだけを扱う。
+    // 文書の段階の PR は、テストの対象のコードを変えないため、CI が失敗しても原因は PR の外にあり、エージェントには直せない
+    const pullRequestRun = CI_FIX_STAGES.has(stage) ? await latestPullRequestRun(github, repository, pullRequest) : undefined;
+    const failedRun = !CI_FIX_STAGES.has(stage)
+      ? undefined
+      : pullRequestRun !== undefined && pullRequestRun.conclusion === FAILURE_CONCLUSION && pullRequestRun.attempt > AUTO_RERUN_ATTEMPTS
+        ? pullRequestRun
+        : latest !== undefined && latest.state === 'APPROVED' && latest.commitId === pullRequest.head.sha
+          ? await findMergeQueueFailure(github, repository, { pullRequestNumber: number, approvedAt: latest.submittedAt, defaultBranch })
+          : undefined;
+    /** @type {{ event: string, runId: number, runAttempt: number, runUrl: string, baseSha: string } | undefined} */
+    let ciFailure;
+    if (failedRun !== undefined && requested(ciFixRequestMarker(failedRun.id, failedRun.attempt))) {
+      core.notice(`#${number} は、この CI の失敗について修正を依頼済みです (依頼し直す場合は、force を有効にして手動実行してください)`);
+    } else if (failedRun !== undefined) {
+      ciFailure = { event: failedRun.event, runId: failedRun.id, runAttempt: failedRun.attempt, runUrl: failedRun.url, baseSha: await getDefaultBranchSha() };
+    }
+
+    if (reviewToFix === undefined && conflict === undefined && ciFailure === undefined) {
+      core.info(`#${number} は、今の head に対して修正が必要な理由が無いため、修正を依頼しません (差し戻しも、コンフリクトも、CI の失敗も無いか、依頼済みです)`);
       return {};
     }
 
@@ -193,7 +244,7 @@ export const requestFix = {
         body: [
           `🤖 ${author.name} による修正が上限の ${max} 回に達したため、自動の修正を止めて人に引き継ぎます。`,
           '',
-          `${owner === undefined ? '' : `@${owner} `}レビューの指摘やコンフリクトを確認して対応してください。対応が終わったら \`${NEEDS_HUMAN_LABEL}\` ラベルを外してください。外すと、改めてレビューし、修正の回数を数え直します。`,
+          `${owner === undefined ? '' : `@${owner} `}レビューの指摘、コンフリクト、CI の失敗を確認して対応してください。対応が終わったら \`${NEEDS_HUMAN_LABEL}\` ラベルを外してください。外すと、改めてレビューし、修正の回数を数え直します。`,
         ].join('\n'),
       });
       core.notice(`#${number} の修正の回数が上限 (${max} 回) に達したため、人に引き継ぎました`);
@@ -218,10 +269,15 @@ export const requestFix = {
       acceptanceCriteria = assignment.ids;
     }
 
-    const reasons = [...(reviewToFix === undefined ? [] : ['レビューの指摘']), ...(conflict === undefined ? [] : ['既定ブランチとのコンフリクト'])];
+    const reasons = [
+      ...(reviewToFix === undefined ? [] : ['レビューの指摘']),
+      ...(conflict === undefined ? [] : ['既定ブランチとのコンフリクト']),
+      ...(ciFailure === undefined ? [] : [ciFailureReason(ciFailure.event)]),
+    ];
     const markers = [
       ...(reviewToFix === undefined ? [] : [fixRequestMarker(reviewToFix.id)]),
       ...(conflict === undefined ? [] : [conflictFixRequestMarker(conflict.baseSha)]),
+      ...(ciFailure === undefined ? [] : [ciFixRequestMarker(ciFailure.runId, ciFailure.runAttempt)]),
     ];
     await github.rest.issues.createComment({
       ...repository,
@@ -254,6 +310,7 @@ export const requestFix = {
             acceptanceCriteria,
             review: reviewToFix === undefined ? null : { id: reviewToFix.id, body: reviewToFix.body, comments: reviewToFix.comments },
             conflict: conflict ?? null,
+            ciFailure: ciFailure ?? null,
             fixRound: rounds + 1,
             maxFixRounds: max,
           },

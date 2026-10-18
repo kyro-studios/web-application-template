@@ -186,6 +186,62 @@ describe('buildFixPrompt (コンフリクト)', () => {
   });
 });
 
+describe('buildFixPrompt (CI の失敗)', () => {
+  const ciFailure = {
+    event: 'pull_request',
+    runId: 501,
+    runAttempt: 2,
+    runUrl: 'https://github.com/kyro-studios/sandbox/actions/runs/501',
+    baseSha: '0123456789abcdef0123456789abcdef01234567',
+  };
+  /**
+   * @param {Record<string, unknown>} fields 修正の資料 (既定の内容を上書きする)
+   * @param {string[]} prompts
+   */
+  const build = (fields, prompts) =>
+    buildFixPrompt({
+      prompts,
+      request: {
+        ...baseRequest,
+        id: 'fix-pr-8-0123456',
+        mode: 'fix',
+        stage: 'implementation',
+        pullRequestNumber: 8,
+        materials: {
+          ...materials,
+          pullRequest: { number: 8, title: 'feat: API を作る', body: 'Closes #3', headRef: 'coding-agent/claude/issue-3-1' },
+          review: null,
+          conflict: null,
+          fixRound: 1,
+          maxFixRounds: 3,
+          ...fields,
+        },
+      },
+    });
+
+  it('CI の失敗の指示と、失敗した CI の実行とログを含める', () => {
+    const prompt = build({ ciFailure: { ...ciFailure, log: 'FAIL greeting.spec.ts' } }, ['修正の指示', '実装の指示', 'CI の失敗の指示']);
+    assert.match(prompt, /^修正の指示\n\nCI の失敗の指示\n\n## 参考: この段階の成果物に求められること/);
+    assert.match(prompt, /- 修正の理由: CI の失敗\n/);
+    assert.match(prompt, /### 失敗した CI のログ\n\nCI の実行: https:\/\/github\.com\/kyro-studios\/sandbox\/actions\/runs\/501 \(2 回目の実行\)\n\n~~~text\nFAIL greeting\.spec\.ts\n~~~/);
+  });
+
+  it('Merge Queue の CI の失敗は、理由で分かるようにする。ログを取得できなければ、その旨を書く', () => {
+    const prompt = build({ ciFailure: { ...ciFailure, event: 'merge_group', runAttempt: 1 } }, ['修正の指示', '実装の指示', 'CI の失敗の指示']);
+    assert.match(prompt, /- 修正の理由: Merge Queue の CI の失敗\n/);
+    assert.match(prompt, /### 失敗した CI のログ\n\n.+\n\n\(ログを取得できませんでした。/);
+  });
+
+  it('コンフリクトもあれば、解消の指示の後に CI の失敗の指示を続ける', () => {
+    const prompt = build(
+      { ciFailure, conflict: { baseSha: ciFailure.baseSha, files: ['app/backend/Main.java'] } },
+      ['修正の指示', '実装の指示', 'コンフリクトの指示', 'CI の失敗の指示'],
+    );
+    assert.match(prompt, /^修正の指示\n\nコンフリクトの指示\n\nCI の失敗の指示\n\n## 参考/);
+    assert.match(prompt, /- 修正の理由: 既定ブランチとのコンフリクト、CI の失敗\n/);
+  });
+});
+
 describe('プロジェクトの背景', () => {
   it('作成では、知識の後、依頼の内容の前に、背景を加える', () => {
     const prompt = buildCreatePrompt({
@@ -303,6 +359,13 @@ describe('promptFiles', () => {
     assert.deepEqual(promptFiles('fix', 'project'), ['fix/common.md', 'create/project.md']);
     // コンフリクトの修正では、解消の指示を加える
     assert.deepEqual(promptFiles('fix', 'implementation', { conflict: true }), ['fix/common.md', 'create/implementation.md', 'fix/conflict.md']);
+    // CI の失敗の修正では、CI の失敗の指示を、コンフリクトの解消の指示の後に加える
+    assert.deepEqual(promptFiles('fix', 'implementation', { conflict: true, ciFailure: true }), [
+      'fix/common.md',
+      'create/implementation.md',
+      'fix/conflict.md',
+      'fix/ci-failure.md',
+    ]);
   });
 
   it('起動できる段階で読み込む指示のファイルが、すべてある', async () => {
@@ -312,7 +375,7 @@ describe('promptFiles', () => {
       ...(await readdir(new URL('fix/', promptsDir))).map((file) => `fix/${file}`),
     ]);
     for (const stage of CREATABLE_STAGES) {
-      for (const file of [...promptFiles('create', stage), ...(stage === 'planning' ? [] : promptFiles('fix', stage, { conflict: true }))]) {
+      for (const file of [...promptFiles('create', stage), ...(stage === 'planning' ? [] : promptFiles('fix', stage, { conflict: true, ciFailure: true }))]) {
         assert.ok(files.has(file), file);
       }
     }

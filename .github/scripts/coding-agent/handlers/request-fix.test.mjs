@@ -4,7 +4,7 @@ import { assignmentMarker, formatCriteriaFile } from '../acceptance-criteria.mjs
 import { createFakeCore, createFakeGitHub } from '../testing/fake-github.mjs';
 import { fixtureConfig } from '../testing/fixture-config.mjs';
 import { mergeableStateOptions } from './detect-conflicts.mjs';
-import { conflictFixRequestMarker, FIX_MARKER, fixRequestMarker, maxFixRounds, requestFix } from './request-fix.mjs';
+import { ciFixRequestMarker, conflictFixRequestMarker, FIX_MARKER, fixRequestMarker, maxFixRounds, requestFix } from './request-fix.mjs';
 
 // マージできるかどうかを、待たずに取得する
 Object.assign(mergeableStateOptions, { attempts: 2, intervalMs: 0 });
@@ -14,6 +14,42 @@ const HEAD_SHA = 'abcdef0123456789abcdef0123456789abcdef01';
 const OLD_SHA = '0123456789abcdef0123456789abcdef01234567';
 const PR_NUMBER = 100;
 const DEVELOP_SHA = 'fedcba9876543210fedcba9876543210fedcba98';
+
+const GROUP_SHA = '1111111111111111111111111111111111111111';
+
+/**
+ * PR の CI の実行を作る。
+ *
+ * @param {{ id: number, attempt: number, conclusion: string, headSha?: string, headBranch?: string }} fields
+ */
+function prRun({ id, attempt, conclusion, headSha = HEAD_SHA, headBranch = 'coding-agent/claude/issue-2-1' }) {
+  return {
+    id,
+    run_attempt: attempt,
+    event: 'pull_request',
+    head_branch: headBranch,
+    head_sha: headSha,
+    conclusion,
+    html_url: `https://github.com/kyro-studios/sandbox/actions/runs/${id}`,
+  };
+}
+
+/**
+ * Merge Queue の CI の実行を作る。
+ *
+ * @param {{ id: number, conclusion: string, branch?: string }} fields
+ */
+function groupRun({ id, conclusion, branch = `gh-readonly-queue/develop/pr-${PR_NUMBER}-${DEVELOP_SHA}` }) {
+  return {
+    id,
+    run_attempt: 1,
+    event: 'merge_group',
+    head_branch: branch,
+    head_sha: GROUP_SHA,
+    conclusion,
+    html_url: `https://github.com/kyro-studios/sandbox/actions/runs/${id}`,
+  };
+}
 
 /**
  * PR を、既定ブランチとコンフリクトしている状態にする。
@@ -33,8 +69,9 @@ function makeConflicting(fake) {
  * @param {object} [options]
  * @param {string} [options.author] PR の作成者
  * @param {{ state: string, commit_id: string }[]} [options.reviews] レビュー担当のレビュー (古いものから)
+ * @param {string} [options.stage] PR が Close する段階の Issue の段階
  */
-function setup({ author = 'claude-app[bot]', reviews = [{ state: 'CHANGES_REQUESTED', commit_id: HEAD_SHA }] } = {}) {
+function setup({ author = 'claude-app[bot]', reviews = [{ state: 'CHANGES_REQUESTED', commit_id: HEAD_SHA }], stage = 'specification' } = {}) {
   const fake = createFakeGitHub({ actor: config.agents.coordinator.bot, permissions: { alice: 'write' } });
   const feature = fake.addIssue({
     title: 'ログイン機能',
@@ -42,7 +79,7 @@ function setup({ author = 'claude-app[bot]', reviews = [{ state: 'CHANGES_REQUES
     labels: ['feature'],
     user: 'alice',
   });
-  const specification = fake.addIssue({ title: '仕様書: ログイン機能', labels: ['stage:specification'], parent: feature.number });
+  const specification = fake.addIssue({ title: '仕様書: ログイン機能', labels: [`stage:${stage}`], parent: feature.number });
   fake.addPull(PR_NUMBER, {
     closing: [specification.number],
     detail: {
@@ -201,6 +238,115 @@ describe('requestFix', () => {
     assert.ok(pull?.detail);
     Object.assign(pull.detail, { mergeable: true, mergeable_state: 'clean' });
 
+    assert.deepEqual((await run(fake)).result, {});
+  });
+
+  it('今の head の PR の CI が再実行しても失敗していれば、既定ブランチを取り込むよう指定して修正を依頼する', async () => {
+    const { fake } = setup({ reviews: [], stage: 'project' });
+    fake.branches.develop = DEVELOP_SHA;
+    fake.workflowRuns.push(prRun({ id: 501, attempt: 2, conclusion: 'failure' }));
+
+    const { result } = await run(fake);
+
+    const request = result.requests?.[0];
+    assert.deepEqual(request?.materials.ciFailure, {
+      event: 'pull_request',
+      runId: 501,
+      runAttempt: 2,
+      runUrl: 'https://github.com/kyro-studios/sandbox/actions/runs/501',
+      baseSha: DEVELOP_SHA,
+    });
+    assert.equal(request?.materials.review, null);
+    assert.equal(request?.materials.conflict, null);
+    assert.ok(fake.comments[0].body.includes('理由: CI の失敗'));
+    assert.ok(fake.comments[0].body.includes(ciFixRequestMarker(501, 2)));
+
+    // 同じ実行の失敗は二重に依頼しない
+    assert.deepEqual((await run(fake)).result, {});
+  });
+
+  it('PR の CI の失敗は、自動の再実行の前 (1 回目の実行) と、古い head や別のブランチの実行では修正しない', async () => {
+    const { fake } = setup({ reviews: [], stage: 'project' });
+    fake.branches.develop = DEVELOP_SHA;
+    fake.workflowRuns.push(prRun({ id: 501, attempt: 1, conclusion: 'failure' }));
+    fake.workflowRuns.push(prRun({ id: 400, attempt: 2, conclusion: 'failure', headSha: OLD_SHA }));
+    assert.deepEqual((await run(fake)).result, {});
+
+    // 最新の実行が通っていれば、前の実行の失敗は見ない
+    fake.workflowRuns.length = 0;
+    fake.workflowRuns.push(prRun({ id: 501, attempt: 2, conclusion: 'failure' }), prRun({ id: 502, attempt: 1, conclusion: 'success' }));
+    assert.deepEqual((await run(fake)).result, {});
+
+    fake.workflowRuns.length = 0;
+    fake.workflowRuns.push(prRun({ id: 503, attempt: 2, conclusion: 'failure', headBranch: 'other' }));
+    assert.deepEqual((await run(fake)).result, {});
+  });
+
+  it('今の head が Approve の後に Merge Queue の CI の失敗で外されていれば、修正を依頼する', async () => {
+    const { fake } = setup({ reviews: [{ state: 'APPROVED', commit_id: HEAD_SHA }], stage: 'project' });
+    fake.branches.develop = DEVELOP_SHA;
+    fake.mergeQueues.set(PR_NUMBER, {
+      queued: false,
+      events: [
+        { type: 'added', createdAt: '2026-10-01T01:00:00Z' },
+        { type: 'removed', createdAt: '2026-10-01T01:05:00Z', beforeCommit: GROUP_SHA },
+      ],
+    });
+    fake.workflowRuns.push(groupRun({ id: 601, conclusion: 'failure' }));
+
+    const { result } = await run(fake);
+
+    assert.deepEqual(result.requests?.[0].materials.ciFailure, {
+      event: 'merge_group',
+      runId: 601,
+      runAttempt: 1,
+      runUrl: 'https://github.com/kyro-studios/sandbox/actions/runs/601',
+      baseSha: DEVELOP_SHA,
+    });
+    assert.ok(fake.comments[0].body.includes('理由: Merge Queue の CI の失敗'));
+    assert.ok(fake.comments[0].body.includes(ciFixRequestMarker(601, 1)));
+  });
+
+  it('Merge Queue の CI の失敗とみなすのは、外されたことの beforeCommit の実行が失敗し、今もキューに無いときだけ', async () => {
+    /**
+     * @param {object} options
+     * @param {boolean} [options.queued]
+     * @param {string} [options.removedAt]
+     * @param {string} [options.conclusion]
+     * @param {string} [options.branch]
+     * @param {string} [options.approvedSha]
+     */
+    const attempt = async ({ queued = false, removedAt = '2026-10-01T01:05:00Z', conclusion = 'failure', branch, approvedSha = HEAD_SHA }) => {
+      const { fake } = setup({ reviews: [{ state: 'APPROVED', commit_id: approvedSha }], stage: 'project' });
+      fake.branches.develop = DEVELOP_SHA;
+      fake.mergeQueues.set(PR_NUMBER, {
+        queued,
+        events: [
+          { type: 'added', createdAt: '2026-10-01T01:00:00Z' },
+          { type: 'removed', createdAt: removedAt, beforeCommit: GROUP_SHA },
+        ],
+      });
+      fake.workflowRuns.push(groupRun({ id: 601, conclusion, branch }));
+      return (await run(fake)).result;
+    };
+
+    assert.equal((await attempt({})).requests?.length, 1);
+    // 外された後に、またキューに入っている
+    assert.deepEqual(await attempt({ queued: true }), {});
+    // コンフリクトや人の操作で外された (Merge Queue の CI は通っている)
+    assert.deepEqual(await attempt({ conclusion: 'success' }), {});
+    // 外されたのが、今の head の Approve より前
+    assert.deepEqual(await attempt({ removedAt: '2026-09-30T00:00:00Z' }), {});
+    // 今の head が Approve されていない (外された後に新しいコミットが push された)
+    assert.deepEqual(await attempt({ approvedSha: OLD_SHA }), {});
+    // 実行のブランチ名が、別の PR のもの
+    assert.deepEqual(await attempt({ branch: `gh-readonly-queue/develop/pr-999-${DEVELOP_SHA}` }), {});
+  });
+
+  it('文書の段階の PR では、CI が失敗しても修正を依頼しない (原因が PR の外にあるため)', async () => {
+    const { fake } = setup({ reviews: [] });
+    fake.branches.develop = DEVELOP_SHA;
+    fake.workflowRuns.push(prRun({ id: 501, attempt: 2, conclusion: 'failure' }));
     assert.deepEqual((await run(fake)).result, {});
   });
 
