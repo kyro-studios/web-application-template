@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { createFakeCore, createFakeGitHub } from '../testing/fake-github.mjs';
 import { fixtureConfig } from '../testing/fixture-config.mjs';
-import { handOver, isHandOverRequested } from './hand-over.mjs';
+import { HAND_OVER_REASONS, handOver, isHandOverRequested } from './hand-over.mjs';
 import { launchStage } from './launch-stage.mjs';
 import { requestFix } from './request-fix.mjs';
 
@@ -118,6 +118,25 @@ describe('handOver.run', () => {
     const comment = fake.comments.find((candidate) => candidate.issue_number === PR_NUMBER);
     assert.match(comment?.body ?? '', /@alice .*ラベルを外してください。外すと、改めてレビューします/);
     assert.doesNotMatch(comment?.body ?? '', /ワークフロー\]/);
+  });
+
+  it('CI の失敗の修正で変更が無かったときも、PR に needs-human を付けて引き継ぐ', async () => {
+    const { fake } = setup();
+
+    await run(fake, dispatchContext({ 'issue-number': String(PR_NUMBER), 'hand-over': 'ci-unresolved', 'source-run-id': '123' }));
+
+    assert.ok(fake.issues.get(PR_NUMBER)?.labels.some((label) => label.name === 'needs-human'));
+    const comment = fake.comments.find((candidate) => candidate.issue_number === PR_NUMBER);
+    assert.match(comment?.body ?? '', /CI の失敗の修正を依頼しましたが、.*エージェントも変更を作りませんでした/);
+  });
+
+  it('エージェントのワークフローが指定する引き継ぐ理由は、すべて扱える', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const workflow = await readFile(new URL('../../../workflows/coding-agent-claude.yml', import.meta.url), 'utf8');
+    const line = workflow.split('\n').find((candidate) => candidate.trim().startsWith('REASON:'));
+    assert.ok(line);
+    const reasons = [...line.matchAll(/'([a-z-]+)'/g)].map((match) => match[1]).filter((reason) => reason !== 'true');
+    assert.deepEqual(reasons.sort(), Object.keys(HAND_OVER_REASONS).sort());
   });
 
   it('段階の Issue でも、エージェントの PR でもなければ、引き継がない', async () => {

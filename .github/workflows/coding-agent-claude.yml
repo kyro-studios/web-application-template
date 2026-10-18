@@ -65,6 +65,7 @@ jobs:
       merge-sha: ${{ steps.merge.outputs.sha }}
       tests-failed: ${{ steps.test-result.outputs.tests-failed }}
       criteria-failed: ${{ steps.criteria.outputs.failed }}
+      ci-unresolved: ${{ steps.ci-check.outputs.unresolved }}
     steps:
       - name: 作業を始めるコミットをチェックアウトする
         uses: actions/checkout@v7
@@ -607,8 +608,22 @@ jobs:
             echo "::error::エージェントが出力した受け入れ基準を検証できませんでした。変更を取り込まずに、人に引き継ぎます"
           fi
 
+      # CI の失敗の修正で、既定ブランチに新しいコミットが無く、エージェントも何も変えなかったら、人に引き継ぐ (仕様の 9.2)。
+      # このまま終えると、PR は CI が失敗したまま止まってしまうため
+      - name: CI の失敗の修正で変更があるか確かめる
+        id: ci-check
+        if: steps.request.outputs.ci-run-id != ''
+        env:
+          TARGET_SHA: ${{ inputs.target-sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "$(git status --porcelain)" ] && [ "$(git rev-parse HEAD)" = "$TARGET_SHA" ]; then
+            echo "unresolved=true" >> "$GITHUB_OUTPUT"
+            echo "::error::CI の失敗の修正で、変更がありませんでした。人に引き継ぎます"
+          fi
+
       - name: 変更内容をまとめる
-        if: steps.request.outputs.kind == 'change' && steps.test-result.outputs.tests-failed != 'true' && steps.criteria.outputs.failed != 'true'
+        if: steps.request.outputs.kind == 'change' && steps.test-result.outputs.tests-failed != 'true' && steps.criteria.outputs.failed != 'true' && steps.ci-check.outputs.unresolved != 'true'
         env:
           TARGET_SHA: ${{ inputs.target-sha }}
           # テストの失敗を直させた場合は、最後に直させた作業の出力 (変更の全体について書き直したもの) を使う
@@ -624,7 +639,7 @@ jobs:
           git diff --cached --stat "$TARGET_SHA"
 
       - name: 変更内容を保存する
-        if: steps.request.outputs.kind == 'change' && steps.test-result.outputs.tests-failed != 'true' && steps.criteria.outputs.failed != 'true'
+        if: steps.request.outputs.kind == 'change' && steps.test-result.outputs.tests-failed != 'true' && steps.criteria.outputs.failed != 'true' && steps.ci-check.outputs.unresolved != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: coding-agent-result
@@ -633,8 +648,9 @@ jobs:
 
   publish:
     needs: work
-    # テストが通らなかった変更と、受け入れ基準を作れなかった変更は取り込まない (人への引き継ぎは hand-over ジョブが行う)
-    if: needs.work.outputs.kind == 'change' && needs.work.outputs.tests-failed != 'true' && needs.work.outputs.criteria-failed != 'true'
+    # テストが通らなかった変更と、受け入れ基準を作れなかった変更は取り込まない。CI の失敗の修正で変更が無ければ、push するものが無い
+    # (人への引き継ぎは hand-over ジョブが行う)
+    if: needs.work.outputs.kind == 'change' && needs.work.outputs.tests-failed != 'true' && needs.work.outputs.criteria-failed != 'true' && needs.work.outputs.ci-unresolved != 'true'
     uses: ./.github/workflows/coding-agent-publish.yml
     permissions:
       contents: read
@@ -650,13 +666,13 @@ jobs:
       # Organization か利用するリポジトリの Secrets に登録した、Claude 用の App の秘密鍵
       app-private-key: ${{ secrets.CODING_AGENT_CLAUDE_PRIVATE_KEY }}
 
-  # テストが通らなかったら (仕様の 6.4)、または受け入れ基準のファイルを作れなかったら (仕様の 10.2)、
-  # 振り分け用のワークフローを手動実行し、進行役の App で人に引き継ぐ。
+  # テストが通らなかったら (仕様の 6.4)、受け入れ基準のファイルを作れなかったら (仕様の 10.2)、
+  # または CI の失敗の修正で変更が無かったら (仕様の 9.2)、振り分け用のワークフローを手動実行し、進行役の App で人に引き継ぐ。
   # このワークフローは進行役の App の秘密鍵を持たないため、needs-human ラベルを付けるのは振り分け用のワークフローが行う
   hand-over:
     name: 人への引き継ぎ
     needs: work
-    if: needs.work.outputs.tests-failed == 'true' || needs.work.outputs.criteria-failed == 'true'
+    if: needs.work.outputs.tests-failed == 'true' || needs.work.outputs.criteria-failed == 'true' || needs.work.outputs.ci-unresolved == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -667,7 +683,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           # 作成のときは段階の Issue に、修正のときは PR に引き継ぐ
           NUMBER: ${{ inputs.mode == 'fix' && inputs.pull-request-number || inputs.issue-number }}
-          REASON: ${{ needs.work.outputs.criteria-failed == 'true' && 'acceptance-criteria' || 'test-failure' }}
+          REASON: ${{ needs.work.outputs.criteria-failed == 'true' && 'acceptance-criteria' || needs.work.outputs.ci-unresolved == 'true' && 'ci-unresolved' || 'test-failure' }}
         run: |
           set -euo pipefail
           gh workflow run coding-agent-router.yml -R "$GITHUB_REPOSITORY" \
