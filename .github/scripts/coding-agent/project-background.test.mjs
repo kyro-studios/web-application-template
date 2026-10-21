@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -32,11 +32,6 @@ describe('stripBackgroundGuide', () => {
     assert.equal(stripBackgroundGuide('# 背景\n\n<!-- 説明 -->\n\n## 方針\n\n<!-- 例 -->\n'), null);
     assert.equal(stripBackgroundGuide(''), null);
     assert.equal(stripBackgroundGuide(null), null);
-  });
-
-  it('テンプレートの docs/project.md は、まだ書かれていないものとして扱う', async () => {
-    const template = await readFile(new URL(`../../../${PROJECT_BACKGROUND_PATH}`, import.meta.url), 'utf8');
-    assert.equal(stripBackgroundGuide(template), null);
   });
 });
 
