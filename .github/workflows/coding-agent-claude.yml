@@ -287,6 +287,29 @@ jobs:
 
       - name: Claude Code で作業する
         id: claude
+        # structured_output が返らないなどで失敗しても、止めずに 1 回だけやり直す (次のステップ)
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          # Claude Code は両方あると API キーを使うため、OAuth のトークンがあるときは API キーを渡さない
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          # 読み取り専用の GITHUB_TOKEN を渡し、Claude GitHub App の書き込み可能なトークンを使わせない
+          github_token: ${{ github.token }}
+          # 振り分け用のワークフロー (github-actions[bot]) からの手動実行を許可する
+          allowed_bots: github-actions
+          # 文書の段階ではファイルを読み書きするだけ、実装計画では読むだけで、コマンドは実行しない。
+          # コードを変える段階では、コマンドも実行する (コマンドから認証の値を読めるため、漏れたときの被害を抑える。仕様の 6.3)
+          claude_args: >-
+            --allowedTools "${{ steps.request.outputs.tools }}"
+            --json-schema '${{ steps.request.outputs.output-schema }}'
+            ${{ steps.request.outputs.execution-args }}
+          prompt: ${{ steps.prompt.outputs.prompt }}
+
+      - name: Claude Code で作業をやり直す
+        id: claude-retry
+        if: steps.claude.outcome == 'failure'
+        # 1 回目が出力を返せずに失敗したときだけ、同じ依頼でやり直す。これも失敗したら、ジョブを失敗にする
         uses: anthropics/claude-code-action@v1
         with:
           # Claude Code は両方あると API キーを使うため、OAuth のトークンがあるときは API キーを渡さない
@@ -307,7 +330,7 @@ jobs:
       - name: 計画をまとめる
         if: steps.request.outputs.kind == 'planning'
         env:
-          STRUCTURED_OUTPUT: ${{ steps.claude.outputs.structured_output }}
+          STRUCTURED_OUTPUT: ${{ steps.claude-retry.outputs.structured_output || steps.claude.outputs.structured_output }}
           PLAN_DIR: ${{ runner.temp }}/coding-agent-plan
         run: |
           set -euo pipefail
@@ -383,7 +406,7 @@ jobs:
         if: steps.test-1.outcome == 'failure' && steps.test-plan.outputs.max-attempts >= 1
         env:
           TRUSTED: ${{ runner.temp }}/trusted
-          PREVIOUS: ${{ steps.claude.outputs.structured_output }}
+          PREVIOUS: ${{ steps.claude-retry.outputs.structured_output || steps.claude.outputs.structured_output }}
           MAX_ATTEMPTS: ${{ steps.test-plan.outputs.max-attempts }}
         run: |
           set -euo pipefail
@@ -439,7 +462,7 @@ jobs:
         if: steps.test-2.outcome == 'failure' && steps.test-plan.outputs.max-attempts >= 2
         env:
           TRUSTED: ${{ runner.temp }}/trusted
-          PREVIOUS: ${{ steps.claude-fix-1.outputs.structured_output || steps.claude.outputs.structured_output }}
+          PREVIOUS: ${{ steps.claude-fix-1.outputs.structured_output || steps.claude-retry.outputs.structured_output || steps.claude.outputs.structured_output }}
           MAX_ATTEMPTS: ${{ steps.test-plan.outputs.max-attempts }}
         run: |
           set -euo pipefail
@@ -495,7 +518,7 @@ jobs:
         if: steps.test-3.outcome == 'failure' && steps.test-plan.outputs.max-attempts >= 3
         env:
           TRUSTED: ${{ runner.temp }}/trusted
-          PREVIOUS: ${{ steps.claude-fix-2.outputs.structured_output || steps.claude-fix-1.outputs.structured_output || steps.claude.outputs.structured_output }}
+          PREVIOUS: ${{ steps.claude-fix-2.outputs.structured_output || steps.claude-fix-1.outputs.structured_output || steps.claude-retry.outputs.structured_output || steps.claude.outputs.structured_output }}
           MAX_ATTEMPTS: ${{ steps.test-plan.outputs.max-attempts }}
         run: |
           set -euo pipefail
@@ -577,6 +600,7 @@ jobs:
         env:
           EXECUTION_FILES: >-
             ${{ steps.claude.outputs.execution_file }}
+            ${{ steps.claude-retry.outputs.execution_file }}
             ${{ steps.claude-fix-1.outputs.execution_file }}
             ${{ steps.claude-fix-2.outputs.execution_file }}
             ${{ steps.claude-fix-3.outputs.execution_file }}
@@ -599,7 +623,7 @@ jobs:
           REQUEST_FILE: ${{ runner.temp }}/coding-agent-requests/${{ inputs.request-id }}.json
           TRUSTED: ${{ runner.temp }}/trusted
           TARGET_SHA: ${{ inputs.target-sha }}
-          STRUCTURED_OUTPUT: ${{ steps.claude.outputs.structured_output }}
+          STRUCTURED_OUTPUT: ${{ steps.claude-retry.outputs.structured_output || steps.claude.outputs.structured_output }}
         run: |
           set -euo pipefail
           (cd "$TRUSTED" && npm ci --ignore-scripts --no-audit --no-fund)
@@ -631,7 +655,7 @@ jobs:
         env:
           TARGET_SHA: ${{ inputs.target-sha }}
           # テストの失敗を直させた場合は、最後に直させた作業の出力 (変更の全体について書き直したもの) を使う
-          STRUCTURED_OUTPUT: ${{ steps.claude-fix-3.outputs.structured_output || steps.claude-fix-2.outputs.structured_output || steps.claude-fix-1.outputs.structured_output || steps.claude.outputs.structured_output }}
+          STRUCTURED_OUTPUT: ${{ steps.claude-fix-3.outputs.structured_output || steps.claude-fix-2.outputs.structured_output || steps.claude-fix-1.outputs.structured_output || steps.claude-retry.outputs.structured_output || steps.claude.outputs.structured_output }}
           RESULT_DIR: ${{ runner.temp }}/coding-agent-result
         run: |
           set -euo pipefail
