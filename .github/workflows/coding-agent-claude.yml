@@ -306,6 +306,13 @@ jobs:
             ${{ steps.request.outputs.execution-args }}
           prompt: ${{ steps.prompt.outputs.prompt }}
 
+      # やり直しは同じパスのやり取りの記録を上書きするため、1 回目の分を別の名前で残す (拒否されたツールを確かめるために使う)
+      - name: 1 回目のやり取りの記録を残す
+        if: always() && steps.claude.outputs.execution_file != ''
+        env:
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: cp "$EXECUTION_FILE" "$RUNNER_TEMP/claude-execution-attempt1.json" || true
+
       - name: Claude Code で作業をやり直す
         id: claude-retry
         if: steps.claude.outcome == 'failure'
@@ -599,14 +606,15 @@ jobs:
         if: always()
         env:
           EXECUTION_FILES: >-
-            ${{ steps.claude.outputs.execution_file }}
+            ${{ runner.temp }}/claude-execution-attempt1.json
             ${{ steps.claude-retry.outputs.execution_file }}
             ${{ steps.claude-fix-1.outputs.execution_file }}
             ${{ steps.claude-fix-2.outputs.execution_file }}
             ${{ steps.claude-fix-3.outputs.execution_file }}
         run: |
           set -uo pipefail
-          for file in ${EXECUTION_FILES}; do
+          # 試行ごとの記録が同じパスを指すことがあるため、重複を除いて数える
+          for file in $(printf '%s\n' ${EXECUTION_FILES} | sort -u); do
             if [ -n "$file" ] && [ -f "$file" ]; then
               jq -r '.. | objects | select(.type? == "result") | .permission_denials[]? | .tool_name? // empty' "$file"
             fi
